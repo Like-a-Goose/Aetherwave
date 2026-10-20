@@ -20,9 +20,22 @@ potential barrier. The **Barrier** knob sets the barrier height as a frequency.
 | Reflect | what bounces back off one barrier | low-pass with notches (transmission resonances) |
 | Resonant Tunnel | two barriers, transmitted | resonant peaks below the barrier (resonant tunnelling) |
 | Resonant Reflect | two barriers, reflected | low-pass with sharp resonant notches |
+| Soft Tunnel | a smooth sech² (Pöschl–Teller) barrier, exact solution | clean high-pass, no ripples; Width sets the slope |
+| Step | a potential step: below it the wave is evanescent | brick-wall high-pass at the barrier |
+| Quantum Well | a deep square well, reflected (Ramsauer–Townsend effect) | low-pass with sharp notches where the well turns transparent |
+| Crystal | five barriers in a row (a tiny Kronig–Penney crystal), transmitted | separate pass bands with band gaps between them |
+| Band Gap | the same crystal, reflected | only the band gaps get through |
+| Particle in a Box | infinite well, levels E = n² E₁ | inharmonic resonances at 1, 4, 9, 16 × the barrier (bell-like) |
+| Harmonic Oscillator | levels E = (n + ½) ħω | resonances on the odd harmonics of half the barrier (hollow, clarinet-like) |
+| Hydrogen | Rydberg series E = 1 − 1/n² and the ionisation continuum | resonances crowding up to the barrier, everything above it passes |
 
-**Width** is the barrier thickness: thicker means steeper and more resonant. **Gap** is the
-space between the two barriers in the resonant modes and moves the resonant peaks.
+The scattering modes are solved exactly (transfer matrices, or the closed form for Soft
+Tunnel). The last three are bound systems: their energy levels become spectral lines whose
+sharpness (the state's lifetime) is set by **Width**.
+
+**Width** is the barrier thickness: thicker means steeper and more resonant (in the bound
+modes, sharper lines). **Gap** is the space between barriers in the Resonant, Crystal and
+Band Gap modes and moves their peaks; it is dimmed when the mode doesn't use it.
 The filter envelope and key tracking move the barrier height in octaves.
 
 The layout is paraphonic: 8 voices with two oscillators (saw, square, triangle, sine) and an
@@ -50,7 +63,7 @@ xd's own volume down or switch its local control off.
 | CUTOFF | Barrier height |
 | RESONANCE | Barrier width |
 | MULTI ENGINE SHAPE | Barrier gap (resonant modes) |
-| VCO1 OCTAVE (16' 8' 4' 2') | Filter mode: Tunnel, Reflect, Resonant Tunnel, Resonant Reflect |
+| MULTI TYPE (NOISE VPM USR) + VCO1 OCTAVE (16' 8' 4' 2') | Filter mode: MULTI TYPE picks a bank of four, VCO1 OCTAVE the mode in it. NOISE: Tunnel, Reflect, Resonant Tunnel, Resonant Reflect. VPM: Soft Tunnel, Step, Quantum Well, Crystal. USR: Band Gap, Particle in a Box, Harmonic Oscillator, Hydrogen |
 | KEY TRACK (0% 50% 100%) | Key tracking |
 | EG INT, EG ATTACK, EG DECAY | Filter envelope amount, attack, decay |
 | AMP EG ATTACK, DECAY, SUSTAIN, RELEASE | Amp envelope |

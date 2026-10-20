@@ -15,8 +15,61 @@ enum class FilterMode
     tunnel,            // keep what tunnels through one barrier: high-pass with ripples
     reflect,           // keep what bounces off one barrier: low-pass with notches
     resonantTunnel,    // twin barrier, transmitted: resonant peaks below the barrier
-    resonantReflect    // twin barrier, reflected: resonant notches
+    resonantReflect,   // twin barrier, reflected: resonant notches
+
+    softTunnel,        // smooth sech^2 barrier: a clean high-pass, width sets the slope
+    step,              // potential step: nothing below the step, a sharp edge above it
+    well,              // deep square well, reflected: a low-pass with Ramsauer-Townsend notches
+    crystal,           // five barriers in a row, transmitted: allowed energy bands
+    bandGap,           // the same crystal, reflected: only the band gaps come through
+
+    box,               // particle in a box: inharmonic lines at n^2 times the barrier
+    oscillator,        // harmonic oscillator: lines on the odd harmonics of half the barrier
+    hydrogen           // Rydberg series crowding up to the barrier, everything above passes
 };
+
+constexpr int numFilterModes = 12;
+
+inline bool isSpectral (FilterMode m)
+{
+    return m == FilterMode::box || m == FilterMode::oscillator || m == FilterMode::hydrogen;
+}
+
+inline bool usesGap (FilterMode m)
+{
+    return m == FilterMode::resonantTunnel || m == FilterMode::resonantReflect
+           || m == FilterMode::crystal || m == FilterMode::bandGap;
+}
+
+// The scattering potential behind a mode (not used by the soft barrier or the spectral modes).
+inline Potential potentialFor (FilterMode mode, double width, double gap)
+{
+    BarrierGeometry g;
+    g.width = width;
+    g.gap = gap;
+    switch (mode)
+    {
+        case FilterMode::resonantTunnel:
+        case FilterMode::resonantReflect: g.shape = BarrierShape::twin; break;
+        case FilterMode::crystal:
+        case FilterMode::bandGap:         g.shape = BarrierShape::lattice; break;
+        case FilterMode::well:            g.shape = BarrierShape::well; break;
+        case FilterMode::step:            g.shape = BarrierShape::step; break;
+        case FilterMode::tunnel:
+        case FilterMode::reflect:
+        case FilterMode::softTunnel:
+        case FilterMode::box:
+        case FilterMode::oscillator:
+        case FilterMode::hydrogen:        g.shape = BarrierShape::single; break;
+    }
+    return makePotential (g);
+}
+
+// Steepness of the smooth barrier: V(x) = sech^2(alpha x), about as wide as Width.
+inline double softAlpha (double width) { return 2.0 / width; }
+
+// Spectral line width for the bound modes: thicker means longer-lived states, sharper lines.
+inline double lineWidth (double width) { return std::clamp (0.25 / width, 0.03, 0.5); }
 
 struct FilterSettings
 {
@@ -35,16 +88,37 @@ struct FilterSettings
 // Magnitude response of the quantum filter at a given frequency.
 inline double tunnelResponse (double frequencyHz, const FilterSettings& s)
 {
-    BarrierGeometry geometry;
-    geometry.width = s.width;
-    geometry.gap = s.gap;
-    geometry.shape = (s.mode == FilterMode::resonantTunnel || s.mode == FilterMode::resonantReflect)
-                         ? BarrierShape::twin
-                         : BarrierShape::single;
+    const double energy = frequencyHz / s.barrierHz;
 
-    const auto result = scatter (frequencyHz / s.barrierHz, geometry);
-    const bool transmitted = (s.mode == FilterMode::tunnel || s.mode == FilterMode::resonantTunnel);
-    return transmitted ? result.transmitted : result.reflected;
+    switch (s.mode)
+    {
+        case FilterMode::softTunnel:
+            return scatterSoft (energy, softAlpha (s.width)).transmitted;
+
+        case FilterMode::box:
+        case FilterMode::oscillator:
+        case FilterMode::hydrogen:
+        {
+            // A faint background keeps the gaps between lines from going completely silent.
+            const auto kind = s.mode == FilterMode::box ? Spectrum::box
+                            : s.mode == FilterMode::oscillator ? Spectrum::oscillator : Spectrum::hydrogen;
+            constexpr double floor = 0.02;
+            return floor + (1.0 - floor) * spectrum (energy, kind, lineWidth (s.width));
+        }
+
+        case FilterMode::reflect:
+        case FilterMode::resonantReflect:
+        case FilterMode::well:  // the Ramsauer-Townsend effect shows as gaps in what bounces back
+        case FilterMode::bandGap:
+            return scatter (energy, potentialFor (s.mode, s.width, s.gap)).reflected;
+
+        case FilterMode::tunnel:
+        case FilterMode::resonantTunnel:
+        case FilterMode::step:
+        case FilterMode::crystal:
+            break;
+    }
+    return scatter (energy, potentialFor (s.mode, s.width, s.gap)).transmitted;
 }
 
 // Applies the quantum barrier's response to audio as a zero-latency minimum-phase FIR.
@@ -155,8 +229,20 @@ private:
         }
 
         const int fftSize = designer.getFftSize();
+        const double binEnergy = sampleRate / fftSize / s.barrierHz;
+        const bool lines = isSpectral (s.mode);
         for (int k = 0; k < designer.getNumBins(); ++k)
-            magnitudes[(size_t) k] = lookup (k * sampleRate / fftSize / s.barrierHz);
+        {
+            double m = lookup (k * binEnergy);
+
+            // Spectral lines can be narrower than an FIR bin and would fall between bins;
+            // taking the strongest point across each bin keeps every line audible.
+            if (lines)
+                for (double offset : { -0.375, -0.25, -0.125, 0.125, 0.25, 0.375 })
+                    m = std::max (m, lookup (std::max (0.0, (k + offset) * binEnergy)));
+
+            magnitudes[(size_t) k] = m;
+        }
 
         designer.design (magnitudes.data(), current.data(), numTaps);
     }
@@ -190,7 +276,7 @@ private:
     static bool sameShape (const FilterSettings& a, const FilterSettings& b)
     {
         auto near = [] (double x, double y) { return std::abs (x - y) <= 1.0e-6 * std::abs (y); };
-        return a.mode == b.mode && near (a.width, b.width) && near (a.gap, b.gap);
+        return a.mode == b.mode && near (a.width, b.width) && (near (a.gap, b.gap) || ! usesGap (a.mode));
     }
 
     std::array<double, tableSize> table {};

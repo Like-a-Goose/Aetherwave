@@ -143,6 +143,13 @@ static void testMinilogueXd()
     }
     check (modesOk, "xd VCO1 OCTAVE picks the four filter modes", modesOk);
 
+    // MULTI TYPE picks the bank: USR + 2' is the twelfth mode.
+    auto bank = decoder.handle (53, 127);
+    auto last = decoder.handle (48, 127);
+    auto firstOfVpm = (decoder.handle (53, 64), decoder.handle (48, 0));
+    check (bank && last && firstOfVpm && last->value == 11.0f && firstOfVpm->value == 4.0f,
+           "xd MULTI TYPE + VCO1 OCTAVE reach all 12 filter modes", last ? last->value : -1.0);
+
     auto down = decoder.handle (49, 0), upTwo = decoder.handle (49, 127);
     check (down && upTwo && down->value == -12.0f && upTwo->value == 24.0f, "xd VCO2 OCTAVE 16'/2' gives -12/+24 semitones",
            upTwo ? upTwo->value : -1.0);
@@ -287,6 +294,175 @@ static void testDeferredShapeLands()
     check (worstDb < 1.5, "deferred Width change reaches the filter within 50 ms", worstDb);
 }
 
+static void testNewModesPhysics()
+{
+    // Probability is conserved for every scattering potential, the step included
+    // (there the transmitted flux carries a k_right / k_left factor).
+    double worst = 0.0;
+    for (auto shape : { BarrierShape::lattice, BarrierShape::well, BarrierShape::step })
+        for (double e = 0.01; e < 50.0; e *= 1.07)
+        {
+            BarrierGeometry g;
+            g.shape = shape;
+            g.width = 2.0;
+            g.gap = 4.0;
+            const auto r = scatter (e, g);
+            worst = std::max (worst, std::abs (r.transmitted * r.transmitted + r.reflected * r.reflected - 1.0));
+        }
+    check (worst < 1.0e-9, "unitarity for crystal, well and step", worst);
+
+    // Potential step against the textbook result.
+    double worstStep = 0.0;
+    BarrierGeometry step;
+    step.shape = BarrierShape::step;
+    for (double e : { 0.3, 0.9, 1.2, 2.0, 10.0 })
+    {
+        const double k1 = std::sqrt (e), k2 = e > 1.0 ? std::sqrt (e - 1.0) : 0.0;
+        const double T = e > 1.0 ? 4.0 * k1 * k2 / ((k1 + k2) * (k1 + k2)) : 0.0;
+        const double t = scatter (e, step).transmitted;
+        worstStep = std::max (worstStep, std::abs (t * t - T));
+    }
+    check (worstStep < 1.0e-9, "potential step matches analytic T(E)", worstStep);
+
+    // Square well against the textbook result (Ramsauer-Townsend).
+    double worstWell = 0.0;
+    BarrierGeometry well;
+    well.shape = BarrierShape::well;
+    well.width = 4.0;
+    const double depth = well.wellDepth;
+    for (double e : { 0.05, 0.3, 1.0, 3.0 })
+    {
+        const double sn = std::sin (well.width * std::sqrt (e + depth));
+        const double T = 1.0 / (1.0 + depth * depth * sn * sn / (4.0 * e * (e + depth)));
+        const double t = scatter (e, well).transmitted;
+        worstWell = std::max (worstWell, std::abs (t * t - T));
+    }
+    check (worstWell < 1.0e-9, "square well matches analytic T(E)", worstWell);
+
+    // The smooth barrier's exact formula against a fine staircase of the same sech^2 shape.
+    const double alpha = softAlpha (3.0);
+    Potential stairs;
+    const double half = 7.0 / alpha;
+    const int slices = Potential::maxSegments;
+    for (int n = 0; n < slices; ++n)
+    {
+        const double x = -half + (n + 0.5) * 2.0 * half / slices;
+        const double c = std::cosh (alpha * x);
+        stairs.add ({ 2.0 * half / slices, 1.0 / (c * c) });
+    }
+    double worstSoft = 0.0;
+    for (double e : { 0.5, 0.9, 1.5, 3.0 })
+        worstSoft = std::max (worstSoft, std::abs (scatterSoft (e, alpha).transmitted - scatter (e, stairs).transmitted));
+    check (worstSoft < 0.06, "smooth barrier formula agrees with a staircase solve", worstSoft);
+
+    // A five-barrier crystal has bands that pass completely and gaps that block.
+    BarrierGeometry crystal;
+    crystal.shape = BarrierShape::lattice;
+    crystal.width = 1.5;
+    crystal.gap = 4.0;
+    double best = 0.0, worstGap = 1.0;
+    for (double e = 0.05; e < 6.0; e += 1.0e-4)
+    {
+        const double t = scatter (e, crystal).transmitted;
+        best = std::max (best, t);
+        worstGap = std::min (worstGap, t);
+    }
+    check (best > 0.99 && worstGap < 0.05, "crystal shows full bands and blocking gaps", worstGap);
+
+    // Spectral modes put their lines where quantum mechanics says.
+    const double w = lineWidth (3.0);
+    const bool box = spectrum (4.0, Spectrum::box, w) > 0.99 && spectrum (9.0, Spectrum::box, w) > 0.99
+                     && spectrum (6.5, Spectrum::box, w) < 0.1;
+    const bool osc = spectrum (0.5, Spectrum::oscillator, w) > 0.99 && spectrum (2.5, Spectrum::oscillator, w) > 0.99
+                     && spectrum (2.0, Spectrum::oscillator, w) < 0.1;
+    const bool hyd = spectrum (0.75, Spectrum::hydrogen, w) > 0.99 && spectrum (1.0 - 1.0 / 9.0, Spectrum::hydrogen, w) > 0.99
+                     && spectrum (0.5, Spectrum::hydrogen, w) < 0.05 && spectrum (1.3, Spectrum::hydrogen, w) == 1.0;
+    check (box && osc && hyd, "box n^2, oscillator n+1/2 and hydrogen 1-1/n^2 lines", box + osc + hyd);
+}
+
+// The FIR's measured response compared with the physics, in dB (both floored at -40 dB).
+static double firErrorDb (const FilterSettings& s, std::initializer_list<double> frequencies)
+{
+    const double sr = 48000.0;
+    TunnelFilter filter;
+    filter.prepare (sr);
+    filter.setSettings (s);
+    std::vector<float> silence (2048, 0.0f);
+    for (int i = 0; i < 4; ++i)
+    {
+        filter.setSettings (s);
+        filter.process (silence.data(), 512);
+    }
+
+    std::vector<float> impulse (TunnelFilter::numTaps, 0.0f);
+    impulse[0] = 1.0f;
+    filter.process (impulse.data(), (int) impulse.size());
+
+    double worstDb = 0.0;
+    for (double f : frequencies)
+    {
+        std::complex<double> h = 0.0;
+        for (size_t n = 0; n < impulse.size(); ++n)
+            h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
+        const double target = std::max (0.01, tunnelResponse (f, s));
+        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::max (0.01, std::abs (h)) / target)));
+    }
+    return worstDb;
+}
+
+static void testNewModesFir()
+{
+    auto settings = [] (FilterMode m, double barrier, double width, double gap)
+    {
+        FilterSettings s;
+        s.mode = m;
+        s.barrierHz = barrier;
+        s.width = width;
+        s.gap = gap;
+        return s;
+    };
+
+    double worst = 0.0;
+    worst = std::max (worst, firErrorDb (settings (FilterMode::softTunnel, 1000.0, 3.0, 6.0), { 300.0, 700.0, 1500.0, 5000.0 }));
+    worst = std::max (worst, firErrorDb (settings (FilterMode::step, 1000.0, 3.0, 6.0), { 1500.0, 3000.0, 8000.0 }));
+    worst = std::max (worst, firErrorDb (settings (FilterMode::well, 1000.0, 3.0, 6.0), { 500.0, 1500.0, 4000.0 }));
+    check (worst < 2.0, "FIR within 2 dB of physics (soft, step, well)", worst);
+
+    // Line spectra: a line centre comes through near full level, the space between lines does not.
+    auto lineContrast = [] (FilterMode m, double barrier, double onLine, double offLine)
+    {
+        FilterSettings s;
+        s.mode = m;
+        s.barrierHz = barrier;
+        s.width = 3.0;
+        const double sr = 48000.0;
+        TunnelFilter filter;
+        filter.prepare (sr);
+        std::vector<float> chunk (512, 0.0f);
+        for (int i = 0; i < 4; ++i)
+        {
+            filter.setSettings (s);
+            filter.process (chunk.data(), 512);
+        }
+        std::vector<float> impulse (TunnelFilter::numTaps, 0.0f);
+        impulse[0] = 1.0f;
+        filter.process (impulse.data(), (int) impulse.size());
+        auto gainAt = [&] (double f)
+        {
+            std::complex<double> h = 0.0;
+            for (size_t n = 0; n < impulse.size(); ++n)
+                h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
+            return std::abs (h);
+        };
+        return 20.0 * std::log10 (gainAt (onLine) / gainAt (offLine));
+    };
+    const double box = lineContrast (FilterMode::box, 500.0, 2000.0, 3250.0);
+    const double osc = lineContrast (FilterMode::oscillator, 1000.0, 2500.0, 3000.0);
+    const double hyd = lineContrast (FilterMode::hydrogen, 4000.0, 3000.0, 2000.0);
+    std::printf ("      line contrast box / oscillator / hydrogen: %.1f / %.1f / %.1f dB\n", box, osc, hyd);
+    check (std::min ({ box, osc, hyd }) > 12.0, "FIR keeps spectral lines at least 12 dB above the gaps", std::min ({ box, osc, hyd }));
+}
+
 static void writeWav (const char* path, const std::vector<float>& audio, int sr)
 {
     std::ofstream f (path, std::ios::binary);
@@ -312,6 +488,14 @@ static void renderDemo (const char* path)
         { FilterMode::tunnel, 300.0, 5.0, 6.0, 2.0f },
         { FilterMode::resonantTunnel, 2500.0, 2.5, 7.0, 1.5f },
         { FilterMode::resonantReflect, 600.0, 2.0, 5.0, 3.0f },
+        { FilterMode::softTunnel, 300.0, 3.0, 6.0, 2.0f },
+        { FilterMode::step, 400.0, 3.0, 6.0, 2.0f },
+        { FilterMode::well, 300.0, 3.0, 6.0, 2.0f },
+        { FilterMode::crystal, 1200.0, 1.5, 4.0, 1.5f },
+        { FilterMode::bandGap, 800.0, 1.5, 4.0, 2.0f },
+        { FilterMode::box, 220.0, 4.0, 6.0, 1.0f },
+        { FilterMode::oscillator, 400.0, 3.0, 6.0, 1.0f },
+        { FilterMode::hydrogen, 2500.0, 2.0, 6.0, 1.0f },
     };
     const int chord[] = { 48, 55, 60, 63 };
 
@@ -398,6 +582,8 @@ int main (int argc, char** argv)
 {
     testPhysics();
     testFilterMatchesPhysics();
+    testNewModesPhysics();
+    testNewModesFir();
     testDeferredShapeLands();
     testMinilogueXd();
     testPerformanceControls();
