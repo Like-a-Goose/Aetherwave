@@ -286,7 +286,7 @@ private:
     float nextLfo (LfoWave wave, int numSamples)
     {
         const double p = lfoPhase;
-        lfoPhase = std::fmod (lfoPhase + settings.lfoRate * numSamples / sampleRate, 1.0);
+        lfoPhase = std::fmod (lfoPhase + (double) settings.lfoRate * numSamples / sampleRate, 1.0);
 
         switch (wave)
         {

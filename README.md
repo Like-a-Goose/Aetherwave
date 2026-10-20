@@ -83,7 +83,7 @@ sudo apt install build-essential cmake ninja-build git pkg-config \
   libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libgl1-mesa-dev
 ```
 
-Build (JUCE 8.0.4 is downloaded automatically):
+Build (JUCE 8.0.16 is downloaded automatically):
 
 ```sh
 cmake -B build -G Ninja
