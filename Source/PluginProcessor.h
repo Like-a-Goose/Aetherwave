@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dsp/MinilogueXd.h"
 #include "dsp/SynthEngine.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -37,6 +38,8 @@ public:
     qs::FilterSettings getBaseFilterSettings() const;
     // Where the envelope has moved the barrier to right now (for the display).
     double getLiveBarrierHz() const { return liveBarrierHz.load(); }
+    // CC number of the last minilogue xd control that moved a parameter, or -1.
+    int getLastXdControl() const { return lastXdControl.load(); }
 
     juce::AudioProcessorValueTreeState parameters;
     juce::MidiKeyboardState keyboardState;
@@ -44,8 +47,11 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     qs::SynthSettings readSettings() const;
+    void handleController (int cc, int value);
 
     qs::SynthEngine engine;
+    qs::xd::Decoder xdDecoder;
+    std::atomic<int> lastXdControl { -1 };
     std::vector<float> mono;
     std::atomic<double> liveBarrierHz { -1.0 };  // negative until audio has run
 

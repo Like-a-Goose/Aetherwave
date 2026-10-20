@@ -21,7 +21,7 @@ private:
     double liveBarrierHz = 800.0;
 };
 
-class QuantumSynthEditor : public juce::AudioProcessorEditor
+class QuantumSynthEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit QuantumSynthEditor (QuantumSynthProcessor&);
@@ -53,6 +53,8 @@ private:
 
     Control* addKnob (const juce::String& paramId, const juce::String& name);
     Control* addChoice (const juce::String& paramId, const juce::String& name);
+    void timerCallback() override;
+    void enableMinilogueMidiInput();
 
     QuantumSynthProcessor& processor;
     BarrierDisplay display;
@@ -60,6 +62,11 @@ private:
 
     std::vector<std::unique_ptr<Control>> controls;
     std::vector<Section> sections;
+
+    juce::Label lastControl;
+    int shownControl = -1;
+    int midiCheckCounter = 19;  // check for a minilogue xd straight away
+    juce::StringArray autoEnabledMidiInputs;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (QuantumSynthEditor)
 };

@@ -11,6 +11,8 @@ namespace qs
 {
 
 enum class Waveform { saw, square, triangle, sine };
+enum class LfoWave { square, triangle, saw };   // same order as the minilogue xd's LFO WAVE switch
+enum class LfoTarget { barrier, mix, pitch };  // matches the xd's CUTOFF / SHAPE / PITCH switch
 
 struct SynthSettings
 {
@@ -26,6 +28,13 @@ struct SynthSettings
 
     float ampAttack = 0.005f, ampDecay = 0.3f, ampSustain = 0.8f, ampRelease = 0.4f;
     float filterAttack = 0.01f, filterDecay = 0.5f, filterSustain = 0.2f, filterRelease = 0.5f;
+
+    LfoWave lfoWave = LfoWave::triangle;
+    LfoTarget lfoTarget = LfoTarget::barrier;
+    float lfoRate = 4.0f;    // Hz
+    float lfoAmount = 0.0f;  // 0..1, the mod wheel (joystick Y+) adds to it
+
+    float bendRange = 2.0f;  // semitones for full pitch bend
 
     float outputGainDb = -6.0f;
 };
@@ -142,7 +151,8 @@ struct Voice
 {
     int note = -1;
     float velocity = 0.0f;
-    bool held = false;
+    bool held = false;       // key is down
+    bool sustained = false;  // key is up but the damper pedal holds the note
     uint64_t startedAt = 0;
     Oscillator osc1, osc2;
     Adsr amp;
@@ -186,6 +196,7 @@ public:
         target->note = note;
         target->velocity = velocity;
         target->held = true;
+        target->sustained = false;
         target->startedAt = ++noteCounter;
         target->osc1.reset();
         target->osc2.reset();
@@ -202,12 +213,14 @@ public:
             if (v.note == note && v.held)
             {
                 v.held = false;
-                v.amp.noteOff();
+                if (sustainPedal)
+                    v.sustained = true;
+                else
+                    v.amp.noteOff();
             }
         }
 
-        if (std::none_of (voices.begin(), voices.end(), [] (const Voice& v) { return v.held; }))
-            filterEnv.noteOff();
+        releaseFilterEnvIfIdle();
     }
 
     void allNotesOff()
@@ -215,9 +228,38 @@ public:
         for (auto& v : voices)
         {
             v.held = false;
+            v.sustained = false;
             v.amp.noteOff();
         }
         filterEnv.noteOff();
+    }
+
+    // Performance controls: these move the sound without changing any parameter.
+    void setPitchBend (float amount) { pitchBend = std::clamp (amount, -1.0f, 1.0f); }   // -1..1
+    void setModWheel (float amount) { modWheel = std::clamp (amount, 0.0f, 1.0f); }      // adds LFO depth
+    void setBarrierDrop (float amount) { barrierDrop = std::clamp (amount, 0.0f, 1.0f); } // lowers the barrier
+
+    void setSustainPedal (bool down)
+    {
+        sustainPedal = down;
+        if (down)
+            return;
+
+        for (auto& v : voices)
+        {
+            if (v.sustained)
+            {
+                v.sustained = false;
+                v.amp.noteOff();
+            }
+        }
+        releaseFilterEnvIfIdle();
+    }
+
+    void resetControllers()
+    {
+        pitchBend = modWheel = barrierDrop = 0.0f;
+        setSustainPedal (false);
     }
 
     // Renders mono audio into out (overwrites it).
@@ -235,6 +277,26 @@ public:
     FilterSettings getCurrentFilterSettings() const { return currentFilter; }
 
 private:
+    void releaseFilterEnvIfIdle()
+    {
+        if (std::none_of (voices.begin(), voices.end(), [] (const Voice& v) { return v.held || v.sustained; }))
+            filterEnv.noteOff();
+    }
+
+    float nextLfo (LfoWave wave, int numSamples)
+    {
+        const double p = lfoPhase;
+        lfoPhase = std::fmod (lfoPhase + settings.lfoRate * numSamples / sampleRate, 1.0);
+
+        switch (wave)
+        {
+            case LfoWave::square:   return p < 0.5 ? 1.0f : -1.0f;
+            case LfoWave::triangle: return (float) (1.0 - 4.0 * std::abs (p - 0.5));
+            case LfoWave::saw:      return (float) (2.0 * p - 1.0);
+        }
+        return 0.0f;
+    }
+
     void renderChunk (float* out, int numSamples)
     {
         const auto& s = settings;
@@ -243,19 +305,28 @@ private:
             v.amp.setParameters (s.ampAttack, s.ampDecay, s.ampSustain, s.ampRelease);
         filterEnv.setParameters (s.filterAttack, s.filterDecay, s.filterSustain, s.filterRelease);
 
-        // The filter envelope and key tracking move the barrier height.
+        // One LFO value per chunk is smooth enough at control rate.
+        const float lfoDepth = std::min (1.0f, s.lfoAmount + modWheel);
+        const float lfo = nextLfo (s.lfoWave, numSamples) * lfoDepth;
+        const float lfoOctaves = s.lfoTarget == LfoTarget::barrier ? 3.0f * lfo : 0.0f;
+        const float lfoSemitones = s.lfoTarget == LfoTarget::pitch ? 12.0f * lfo * lfoDepth : 0.0f;
+        const float mix = std::clamp (s.oscMix + (s.lfoTarget == LfoTarget::mix ? 0.5f * lfo : 0.0f), 0.0f, 1.0f);
+
+        // The filter envelope, key tracking, LFO and joystick move the barrier height.
         const float octaves = s.envAmountOctaves * filterEnv.getLevel()
-                              + s.keyTrack * (float) (lastNote - 60) / 12.0f;
+                              + s.keyTrack * (float) (lastNote - 60) / 12.0f
+                              + lfoOctaves - 4.0f * barrierDrop;
         currentFilter = s.filter;
         currentFilter.barrierHz = std::clamp (s.filter.barrierHz * std::exp2 ((double) octaves), 10.0, 20000.0);
         filter.setSettings (currentFilter);
 
         const double osc2Ratio = std::exp2 ((s.osc2Semitones + s.osc2Cents / 100.0) / 12.0);
+        const double pitchOffset = pitchBend * s.bendRange + lfoSemitones;
 
         std::array<double, numVoices> inc1 {}, inc2 {};
         for (size_t i = 0; i < voices.size(); ++i)
         {
-            inc1[i] = 440.0 * std::exp2 ((voices[i].note - 69) / 12.0) / sampleRate;
+            inc1[i] = std::min (440.0 * std::exp2 ((voices[i].note - 69 + pitchOffset) / 12.0) / sampleRate, 0.49);
             inc2[i] = std::min (inc1[i] * osc2Ratio, 0.49);
         }
 
@@ -271,7 +342,7 @@ private:
 
                 const float a = v.osc1.next (s.osc1Wave, inc1[i]);
                 const float b = v.osc2.next (s.osc2Wave, inc2[i]);
-                sum += (a + (b - a) * s.oscMix) * v.amp.next() * v.velocity;
+                sum += (a + (b - a) * mix) * v.amp.next() * v.velocity;
             }
 
             filterEnv.next();
@@ -293,6 +364,10 @@ private:
     FilterSettings currentFilter;
     uint64_t noteCounter = 0;
     int lastNote = 60;
+
+    double lfoPhase = 0.0;
+    float pitchBend = 0.0f, modWheel = 0.0f, barrierDrop = 0.0f;
+    bool sustainPedal = false;
 };
 
 } // namespace qs

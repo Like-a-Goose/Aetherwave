@@ -1,11 +1,14 @@
 // Checks the quantum DSP core without JUCE, and renders a short demo WAV.
 // Usage: qs_dsp_tests [demo.wav]
 
+#include "../Source/dsp/MinilogueXd.h"
 #include "../Source/dsp/SynthEngine.h"
 
 #include <chrono>
+#include <complex>
 #include <cstdio>
 #include <fstream>
+#include <string>
 #include <vector>
 
 using namespace qs;
@@ -104,6 +107,186 @@ static void testFilterMatchesPhysics()
     check (early / total > 0.9, "energy in first 2 ms (minimum phase, no latency)", early / total);
 }
 
+static void testMinilogueXd()
+{
+    xd::Decoder decoder;
+
+    // A 10-bit knob: CC63 carries the low 3 bits right before the knob's own CC.
+    decoder.handle (63, 5);
+    auto cutoff = decoder.handle (43, 64);
+    check (cutoff && std::string (cutoff->control->paramId) == "barrier" && cutoff->normalised
+               && std::abs (cutoff->value - ((64 << 3) | 5) / 1023.0f) < 1.0e-6f,
+           "xd CUTOFF with CC63 decodes to 10 bits", cutoff ? cutoff->value : -1.0);
+
+    // The low bits only belong to the next CC.
+    auto resonance = decoder.handle (44, 127);
+    check (resonance && std::abs (resonance->value - (127 << 3) / 1023.0f) < 1.0e-6f,
+           "xd low bits are not reused by the following knob", resonance ? resonance->value : -1.0);
+
+    // Full travel reaches both ends.
+    decoder.handle (63, 7);
+    auto top = decoder.handle (16, 127);
+    auto bottom = decoder.handle (16, 0);
+    check (top && bottom && top->value == 1.0f && bottom->value == 0.0f, "xd knob covers 0..1", top ? top->value : -1.0);
+
+    // Switches.
+    auto saw = decoder.handle (50, 127), sqr = decoder.handle (50, 0), tri = decoder.handle (51, 64);
+    check (saw && sqr && tri && saw->value == 0.0f && sqr->value == 1.0f && tri->value == 2.0f,
+           "xd VCO WAVE SAW/SQR/TRI pick Saw/Square/Triangle", saw ? saw->value : -1.0);
+
+    bool modesOk = true;
+    const int octavePositions[] = { 0, 42, 84, 127 };
+    for (int i = 0; i < 4; ++i)
+    {
+        auto mode = decoder.handle (48, octavePositions[i]);
+        modesOk = modesOk && mode && std::string (mode->control->paramId) == "filterMode" && mode->value == (float) i;
+    }
+    check (modesOk, "xd VCO1 OCTAVE picks the four filter modes", modesOk);
+
+    auto down = decoder.handle (49, 0), upTwo = decoder.handle (49, 127);
+    check (down && upTwo && down->value == -12.0f && upTwo->value == 24.0f, "xd VCO2 OCTAVE 16'/2' gives -12/+24 semitones",
+           upTwo ? upTwo->value : -1.0);
+
+    auto half = decoder.handle (83, 64);
+    check (half && half->value == 0.5f, "xd KEY TRACK 50% gives 0.5", half ? half->value : -1.0);
+
+    // VCO levels set the oscillator mix.
+    decoder.handle (39, 127);
+    auto onlyOsc1 = decoder.handle (40, 0);
+    auto equal = decoder.handle (40, 127);
+    check (onlyOsc1 && equal && onlyOsc1->value == 0.0f && std::abs (equal->value - 0.5f) < 1.0e-6f,
+           "xd VCO1/VCO2 LEVEL set the oscillator mix", equal ? equal->value : -1.0);
+
+    check (! decoder.handle (7, 100) && ! decoder.handle (1, 100), "xd unmapped CCs are ignored", 0.0);
+}
+
+static double rms (const std::vector<float>& x)
+{
+    double sum = 0.0;
+    for (float v : x)
+        sum += (double) v * v;
+    return std::sqrt (sum / (double) x.size());
+}
+
+// Zero crossings per second of a single sine voice: about twice its frequency.
+static double measureFrequency (SynthEngine& engine, int sr)
+{
+    std::vector<float> block ((size_t) sr / 2);
+    engine.render (block.data(), (int) block.size());
+    int crossings = 0;
+    for (size_t n = 1; n < block.size(); ++n)
+        crossings += (block[n - 1] < 0.0f) != (block[n] < 0.0f);
+    return crossings / 2.0 / 0.5;
+}
+
+static void testPerformanceControls()
+{
+    const int sr = 48000;
+    SynthSettings s;
+    s.osc1Wave = s.osc2Wave = Waveform::sine;
+    s.osc2Cents = 0.0f;
+    s.filter.mode = FilterMode::tunnel;
+    s.filter.barrierHz = 20.0;  // let the sine through
+    s.envAmountOctaves = 0.0f;
+    s.keyTrack = 0.0f;
+    s.ampRelease = 0.01f;
+
+    SynthEngine engine;
+    engine.prepare (sr);
+    engine.setSettings (s);
+    engine.noteOn (69, 1.0f);
+    const double plain = measureFrequency (engine, sr);
+    engine.setPitchBend (1.0f);
+    const double bent = measureFrequency (engine, sr);
+    check (std::abs (bent / plain - std::exp2 (2.0 / 12.0)) < 0.01, "full pitch bend raises 2 semitones", bent / plain);
+
+    // Damper pedal holds released notes until it comes up.
+    std::vector<float> block (4800);
+    engine.setPitchBend (0.0f);
+    engine.setSustainPedal (true);
+    engine.noteOff (69);
+    engine.render (block.data(), (int) block.size());
+    engine.render (block.data(), (int) block.size());
+    const double held = rms (block);
+    engine.setSustainPedal (false);
+    engine.render (block.data(), (int) block.size());
+    engine.render (block.data(), (int) block.size());
+    check (held > 0.05 && rms (block) < 1.0e-4, "damper pedal sustains, then releases", held);
+
+    // Joystick Y- pulls the barrier down. In Tunnel mode that lets more of a note below it through.
+    s.filter.barrierHz = 2000.0;
+    engine.setSettings (s);
+    engine.noteOn (57, 1.0f);  // 220 Hz, well below the barrier
+    engine.render (block.data(), (int) block.size());
+    engine.render (block.data(), (int) block.size());
+    const double closed = rms (block);
+    engine.setBarrierDrop (1.0f);
+    engine.render (block.data(), (int) block.size());
+    engine.render (block.data(), (int) block.size());
+    check (rms (block) > 2.0 * closed, "joystick Y- lowers the barrier", rms (block) / closed);
+    engine.setBarrierDrop (0.0f);
+    engine.render (block.data(), (int) block.size());
+
+    // The mod wheel (joystick Y+) adds LFO depth, which wobbles the barrier.
+    s.lfoRate = 3.0f;
+    s.lfoTarget = LfoTarget::barrier;
+    engine.setSettings (s);
+    auto spread = [&]
+    {
+        double lo = 1.0e9, hi = 0.0;
+        for (int i = 0; i < 40; ++i)
+        {
+            std::vector<float> chunk (1200);
+            engine.render (chunk.data(), (int) chunk.size());
+            lo = std::min (lo, rms (chunk));
+            hi = std::max (hi, rms (chunk));
+        }
+        return hi / lo;
+    };
+    const double still = spread();
+    engine.setModWheel (1.0f);
+    const double wobbling = spread();
+    std::printf ("      level spread without / with mod wheel: %.3f / %.3f\n", still, wobbling);
+    check (still < 1.1 && wobbling > 2.0, "mod wheel brings in the LFO on the barrier", wobbling);
+}
+
+// A Width change that arrives right after another one is held back, but must still land.
+static void testDeferredShapeLands()
+{
+    const double sr = 48000.0;
+    TunnelFilter filter;
+    filter.prepare (sr);
+
+    FilterSettings s;
+    s.mode = FilterMode::resonantReflect;
+    s.barrierHz = 1000.0;
+    s.width = 2.0;
+    std::vector<float> chunk (128, 0.0f);
+    filter.setSettings (s);
+    filter.process (chunk.data(), (int) chunk.size());
+
+    s.width = 5.0;  // too soon after the last rebuild: deferred
+    for (int i = 0; i < 20; ++i)
+    {
+        filter.setSettings (s);
+        filter.process (chunk.data(), (int) chunk.size());
+    }
+
+    std::vector<float> impulse (TunnelFilter::numTaps, 0.0f);
+    impulse[0] = 1.0f;
+    filter.process (impulse.data(), (int) impulse.size());
+
+    double worstDb = 0.0;
+    for (double f : { 300.0, 700.0, 2000.0, 6000.0 })
+    {
+        std::complex<double> h = 0.0;
+        for (size_t n = 0; n < impulse.size(); ++n)
+            h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
+        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (h) / std::max (1.0e-3, tunnelResponse (f, s)))));
+    }
+    check (worstDb < 1.5, "deferred Width change reaches the filter within 50 ms", worstDb);
+}
+
 static void writeWav (const char* path, const std::vector<float>& audio, int sr)
 {
     std::ofstream f (path, std::ios::binary);
@@ -192,12 +375,32 @@ static void benchmark()
     const double seconds = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
 
     check (seconds / 5.0 < 0.2, "CPU per realtime second, 8 voices, sweeping filter", seconds / 5.0);
+
+    // Turning the minilogue xd's RESONANCE knob changes Width on every control step, which
+    // rebuilds the physics table each time: the worst case for a knob sweep.
+    const auto knobStart = std::chrono::steady_clock::now();
+    for (int b = 0; b < blocks; ++b)
+    {
+        s.filter.width = 0.3 + 7.7 * (0.5 + 0.5 * std::sin (b * 0.05));
+        engine.setSettings (s);
+        for (int c = 0; c < 4; ++c)  // a new width for every 128-sample step
+        {
+            s.filter.width += 1.0e-3;
+            engine.setSettings (s);
+            engine.render (block.data() + c * 128, 128);
+        }
+    }
+    const double knobSeconds = std::chrono::duration<double> (std::chrono::steady_clock::now() - knobStart).count();
+    check (knobSeconds / 5.0 < 0.15, "CPU per realtime second, RESONANCE knob sweeping Width", knobSeconds / 5.0);
 }
 
 int main (int argc, char** argv)
 {
     testPhysics();
     testFilterMatchesPhysics();
+    testDeferredShapeLands();
+    testMinilogueXd();
+    testPerformanceControls();
     benchmark();
     renderDemo (argc > 1 ? argv[1] : "quantum-demo.wav");
     std::printf ("%s\n", failures == 0 ? "All checks passed." : "Some checks FAILED.");

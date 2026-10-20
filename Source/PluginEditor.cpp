@@ -1,5 +1,9 @@
 #include "PluginEditor.h"
 
+#if JucePlugin_Build_Standalone
+ #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+#endif
+
 namespace colours
 {
 const juce::Colour background { 0xff12141c };
@@ -245,12 +249,78 @@ QuantumSynthEditor::QuantumSynthEditor (QuantumSynthProcessor& p)
                           { addKnob ("ampA", "Attack"), addKnob ("ampD", "Decay"), addKnob ("ampS", "Sustain"), addKnob ("ampR", "Release") }, {} });
     sections.push_back ({ "Filter envelope",
                           { addKnob ("filtA", "Attack"), addKnob ("filtD", "Decay"), addKnob ("filtS", "Sustain"), addKnob ("filtR", "Release") }, {} });
-    sections.push_back ({ "Output", { addKnob ("gain", "Gain") }, {} });
+    sections.push_back ({ "LFO",
+                          { addChoice ("lfoWave", "Wave"), addChoice ("lfoTarget", "Target"),
+                            addKnob ("lfoRate", "Rate"), addKnob ("lfoAmount", "Amount") }, {} });
+    sections.push_back ({ "MIDI and output",
+                          { addChoice ("ccMap", "CC map"), addKnob ("bendRange", "Bend"), addKnob ("gain", "Gain") }, {} });
 
-    setSize (980, 600);
+    lastControl.setJustificationType (juce::Justification::centredRight);
+    lastControl.setColour (juce::Label::textColourId, colours::dimText);
+    lastControl.setFont (juce::FontOptions (12.0f));
+    lastControl.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (lastControl);
+
+    setSize (1260, 600);
+    startTimerHz (10);
 }
 
 QuantumSynthEditor::~QuantumSynthEditor() = default;
+
+void QuantumSynthEditor::timerCallback()
+{
+    // Show which synth parameter the last minilogue xd knob moved, so the mapping is easy to learn.
+    const int cc = processor.getLastXdControl();
+    if (cc != shownControl)
+    {
+        shownControl = cc;
+        if (const auto* c = qs::xd::findControl (cc))
+            if (auto* param = processor.parameters.getParameter (c->paramId))
+                lastControl.setText (juce::String ("minilogue xd ") + c->panelName + " > " + param->getName (64),
+                                     juce::dontSendNotification);
+    }
+
+    if (++midiCheckCounter >= 20)  // every 2 seconds
+    {
+        midiCheckCounter = 0;
+        enableMinilogueMidiInput();
+    }
+}
+
+void QuantumSynthEditor::enableMinilogueMidiInput()
+{
+#if JucePlugin_Build_Standalone
+    // The Linux standalone app opens no MIDI inputs by itself. When a minilogue xd is plugged
+    // in, enable its keyboard and knob port once; after that the Options dialog is in charge.
+    auto* holder = juce::StandalonePluginHolder::getInstance();
+    if (holder == nullptr)
+        return;
+
+    juce::Array<juce::MidiDeviceInfo> candidates;
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (device.name.containsIgnoreCase ("minilogue xd") && ! autoEnabledMidiInputs.contains (device.identifier))
+            candidates.add (device);
+
+    if (candidates.isEmpty())
+        return;
+
+    // The xd has two USB MIDI ports. Only the first one (KBD/KNOB) sends what is played,
+    // so enabling one port avoids doubled notes if the other also echoes.
+    auto chosen = candidates.getFirst();
+    for (const auto& device : candidates)
+        if (device.name.containsIgnoreCase ("KBD"))
+            chosen = device;
+
+    for (const auto& device : candidates)
+        autoEnabledMidiInputs.add (device.identifier);
+
+    auto& devices = holder->deviceManager;
+    const bool alreadyListening = std::any_of (candidates.begin(), candidates.end(), [&] (const juce::MidiDeviceInfo& d)
+                                               { return devices.isMidiInputDeviceEnabled (d.identifier); });
+    if (! alreadyListening)
+        devices.setMidiInputDeviceEnabled (chosen.identifier, true);
+#endif
+}
 
 void QuantumSynthEditor::paint (juce::Graphics& g)
 {
@@ -274,6 +344,7 @@ void QuantumSynthEditor::resized()
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 43.0f);  // 43 white keys from C1 to C7
     area.removeFromBottom (10);
     display.setBounds (area.removeFromTop (190));
+    lastControl.setBounds (display.getBounds().reduced (12, 8).removeFromTop (18).removeFromRight (360));
     area.removeFromTop (10);
 
     auto layoutRow = [this] (juce::Rectangle<int> row, std::initializer_list<int> sectionIndices)
@@ -297,7 +368,7 @@ void QuantumSynthEditor::resized()
     };
 
     const int rowHeight = (area.getHeight() - 10) / 2;
-    layoutRow (area.removeFromTop (rowHeight), { 0, 1 });
+    layoutRow (area.removeFromTop (rowHeight), { 0, 1, 5 });
     area.removeFromTop (10);
     layoutRow (area.removeFromTop (rowHeight), { 2, 3, 4 });
 }

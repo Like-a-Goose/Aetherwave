@@ -27,7 +27,51 @@ The filter envelope and key tracking move the barrier height in octaves.
 
 The layout is paraphonic: 8 voices with two oscillators (saw, square, triangle, sine) and an
 amp envelope each, all summed into one shared quantum filter. The filter envelope retriggers
-on every new note.
+on every new note. An LFO can move the barrier, the oscillator mix or the pitch.
+
+## Playing it from a Korg minilogue xd
+
+Quantum Synth understands a minilogue xd out of the box (the **CC map** menu is set to
+"minilogue xd"; set it to "Off" if another controller's CCs clash). Its knobs move the
+synth's parameters, so the on-screen knobs follow and Reaper can record them as automation.
+The top right of the display names the last xd control you touched and what it moved.
+
+On the minilogue xd, open the Global settings and set **MIDI Route** to USB+MIDI (or USB)
+and **MIDI Tx CC** to On, otherwise the knobs send nothing. To hear only the plugin, turn the
+xd's own volume down or switch its local control off.
+
+| minilogue xd | Quantum Synth |
+| --- | --- |
+| Keyboard, velocity | notes, velocity |
+| Joystick left/right | pitch bend (range set by the **Bend** knob, 2 semitones by default) |
+| Joystick up (CC1) | adds LFO depth, like a mod wheel |
+| Joystick down (CC2) | pulls the barrier down by up to 4 octaves |
+| Damper pedal (CC64) | sustain |
+| CUTOFF | Barrier height |
+| RESONANCE | Barrier width |
+| MULTI ENGINE SHAPE | Barrier gap (resonant modes) |
+| VCO1 OCTAVE (16' 8' 4' 2') | Filter mode: Tunnel, Reflect, Resonant Tunnel, Resonant Reflect |
+| KEY TRACK (0% 50% 100%) | Key tracking |
+| EG INT, EG ATTACK, EG DECAY | Filter envelope amount, attack, decay |
+| AMP EG ATTACK, DECAY, SUSTAIN, RELEASE | Amp envelope |
+| VCO1 WAVE, VCO2 WAVE | Osc 1 and Osc 2 wave (SQR, TRI, SAW) |
+| VCO2 OCTAVE | Osc 2 transpose: -12, 0, +12, +24 semitones |
+| VCO2 PITCH | Osc 2 fine tune |
+| VCO1 LEVEL, VCO2 LEVEL | Oscillator mix |
+| LFO RATE, INT, WAVE | LFO rate, amount, wave |
+| LFO TARGET (CUTOFF, SHAPE, PITCH) | LFO target: barrier, oscillator mix, pitch |
+
+The xd's continuous knobs are 10-bit: it sends the low bits on CC63 just before each knob's
+CC, and Quantum Synth combines the two, so sweeps are smooth. Controls not in the table
+(VCO shapes, cross mod, sync, ring, effects, the sequencer's own sounds) are ignored.
+
+**Standalone app:** when a minilogue xd is plugged in, the app enables its MIDI input by
+itself (only the xd's first, keyboard and knob, port, so notes are not doubled). You can still
+change this in Options.
+
+**Reaper:** in Preferences, MIDI Devices, enable the minilogue xd input. On the Quantum Synth
+track, arm it, set the record input to the minilogue xd (or all MIDI inputs) and turn on
+record monitoring. The knobs, joystick and pedal then work while playing and recording.
 
 ## Build on Linux
 
@@ -63,7 +107,9 @@ audio and MIDI devices from the Options button. The on-screen keyboard plays not
 
 `qs_dsp_tests` checks the physics and DSP without JUCE: probability conservation
 (|t|² + |r|² = 1), the single-barrier result against the textbook formula, perfect resonant
-tunnelling for the twin barrier, the FIR matching the physics, zero latency, and CPU use.
+tunnelling for the twin barrier, the FIR matching the physics, zero latency, CPU use (also
+while a controller knob sweeps the barrier width), the minilogue xd CC decoding, pitch bend,
+the damper pedal and the joystick.
 It also renders `quantum-demo.wav` through all four filter modes.
 
 ```sh
