@@ -103,6 +103,9 @@ click "Re-scan". Quantum Synth then shows up under instruments.
 The standalone app supports ALSA and JACK (PipeWire's JACK layer works too). Pick the
 audio and MIDI devices from the Options button. The on-screen keyboard plays notes too.
 
+The window can be resized (by its frame, in Reaper and in the standalone app) from 75% to 200%;
+everything, text included, scales with it.
+
 ## Tests
 
 `qs_dsp_tests` checks the physics and DSP without JUCE: probability conservation
