@@ -92,7 +92,7 @@ static void testFilterMatchesPhysics()
         for (size_t n = 0; n < impulse.size(); ++n)
             h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
         const double target = tunnelResponse (f, s);
-        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (h) / target)));
+        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (h) / filter.getMakeupGain() / target)));
     }
     check (worstDb < 1.5, "FIR response within 1.5 dB of physics (reflect mode)", worstDb);
 
@@ -258,6 +258,34 @@ static void testPerformanceControls()
 }
 
 // A Width change that arrives right after another one is held back, but must still land.
+static void testModeLoudness()
+{
+    // With the default knobs, every mode should play at a usable level: within a few dB of the
+    // loudest one, held notes measured after the filter envelope settles.
+    for (int note : { 48, 60 })
+    {
+        double loudest = -200.0, quietest = 0.0;
+        for (int m = 0; m < numFilterModes; ++m)
+        {
+            SynthEngine engine;
+            engine.prepare (48000.0);
+            SynthSettings s;
+            s.filter.mode = (FilterMode) m;
+            s.filter.barrierHz = 600.0;  // the plug-in's default
+            engine.setSettings (s);
+            engine.noteOn (note, 1.0f);
+            std::vector<float> block (96000);
+            engine.render (block.data(), (int) block.size());
+            const std::vector<float> held (block.begin() + 48000, block.end());
+            const double db = 20.0 * std::log10 (rms (held));
+            loudest = std::max (loudest, db);
+            quietest = std::min (quietest, db);
+        }
+        std::printf ("      note %d: modes span %.1f dB (%.1f .. %.1f dBFS)\n", note, loudest - quietest, quietest, loudest);
+        check (loudest - quietest < 6.0, "all filter modes within 6 dB of each other at default settings", loudest - quietest);
+    }
+}
+
 static void testDeferredShapeLands()
 {
     const double sr = 48000.0;
@@ -289,7 +317,7 @@ static void testDeferredShapeLands()
         std::complex<double> h = 0.0;
         for (size_t n = 0; n < impulse.size(); ++n)
             h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
-        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (h) / std::max (1.0e-3, tunnelResponse (f, s)))));
+        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (h) / filter.getMakeupGain() / std::max (1.0e-3, tunnelResponse (f, s)))));
     }
     check (worstDb < 1.5, "deferred Width change reaches the filter within 50 ms", worstDb);
 }
@@ -405,7 +433,7 @@ static double firErrorDb (const FilterSettings& s, std::initializer_list<double>
         for (size_t n = 0; n < impulse.size(); ++n)
             h += (double) impulse[n] * std::polar (1.0, -2.0 * 3.14159265358979323846 * f * (double) n / sr);
         const double target = std::max (0.01, tunnelResponse (f, s));
-        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::max (0.01, std::abs (h)) / target)));
+        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::max (0.01, std::abs (h) / filter.getMakeupGain()) / target)));
     }
     return worstDb;
 }
@@ -587,6 +615,7 @@ int main (int argc, char** argv)
     testDeferredShapeLands();
     testMinilogueXd();
     testPerformanceControls();
+    testModeLoudness();
     benchmark();
     renderDemo (argc > 1 ? argv[1] : "quantum-demo.wav");
     std::printf ("%s\n", failures == 0 ? "All checks passed." : "Some checks FAILED.");
