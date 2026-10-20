@@ -3,6 +3,7 @@
 #include "MinPhaseFir.h"
 #include "QuantumBarrier.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -152,6 +153,35 @@ public:
         position = 0;
     }
 
+    struct Pitch
+    {
+        double hz;
+        double weight;  // relative level of this oscillator
+    };
+    static constexpr int maxPitches = 16;
+
+    // What the level make-up is judged on: the oscillator pitches playing and the barrier height
+    // set on the panel, before the envelope, LFO and joystick move it. Those still sweep the level
+    // as much as ever. Takes effect with the next setSettings call.
+    void setLevelReference (const Pitch* newPitches, int count, double barrierHz)
+    {
+        auto near = [] (double x, double y) { return std::abs (x - y) <= 1.0e-3 * std::abs (y); };
+        count = std::min (count, maxPitches);
+        bool same = count == numPitches && near (barrierHz, referenceBarrierHz);
+        for (int j = 0; same && j < count; ++j)
+            same = near (newPitches[j].hz, pitches[(size_t) j].hz) && near (newPitches[j].weight, pitches[(size_t) j].weight);
+        if (same)
+            return;
+
+        std::copy (newPitches, newPitches + count, pitches.begin());
+        numPitches = count;
+        referenceBarrierHz = barrierHz;
+        makeupDirty = needsDesign = true;
+    }
+
+    // The level boost in the current FIR, as a gain factor.
+    double getMakeupGain() const { return makeup; }
+
     void setSettings (const FilterSettings& newSettings)
     {
         const bool deferredShapeDue = shapePending && samplesSinceTable >= minSamplesBetweenTables;
@@ -221,6 +251,7 @@ private:
             {
                 buildTable (s);
                 samplesSinceTable = 0;
+                makeupDirty = true;
             }
             else
             {
@@ -244,6 +275,14 @@ private:
             magnitudes[(size_t) k] = m;
         }
 
+        if (makeupDirty)
+        {
+            makeup = makeupGain();
+            makeupDirty = false;
+        }
+        for (auto& m : magnitudes)
+            m *= makeup;
+
         designer.design (magnitudes.data(), current.data(), numTaps);
     }
 
@@ -260,6 +299,55 @@ private:
         const double step = std::log (tableMaxEnergy / tableMinEnergy) / (tableSize - 1);
         for (int j = 0; j < tableSize; ++j)
             table[(size_t) j] = tunnelResponse (tableMinEnergy * std::exp (j * step), tableSettings);
+    }
+
+    // Many shapes pass only a small part of a note's harmonics (a high-pass with the barrier above
+    // the note, the narrow lines of the bound modes), so they sound much quieter than the others.
+    // This estimates how much of the playing notes gets through, treating each as a sawtooth, and
+    // makes up most of the loss. Only most of it, so turning the barrier still opens and closes
+    // the sound; and never more than the cap, or the gaps between spectral lines would turn to hiss.
+    double makeupGain() const
+    {
+        if (numPitches == 0)
+            return makeup;  // nothing playing: keep the last level
+
+        constexpr int harmonics = 48;
+        constexpr double strength = 0.75, maxBoostDb = 18.0;
+        const double topHz = std::min (16000.0, 0.45 * sampleRate);
+        const double binEnergy = sampleRate / designer.getFftSize() / referenceBarrierHz;
+
+        double passed = 0.0, total = 0.0;
+        for (int j = 0; j < numPitches; ++j)
+        {
+            const auto& p = pitches[(size_t) j];
+            for (int n = 1; n <= harmonics && n * p.hz < topHz; ++n)
+            {
+                const double h = binResponse (n * p.hz / referenceBarrierHz, binEnergy);
+                const double weight = p.weight / ((double) n * n);  // sawtooth harmonic power
+                passed += weight * h * h;
+                total += weight;
+            }
+        }
+        if (total <= 0.0)
+            return makeup;
+
+        const double lossDb = 10.0 * std::log10 (total / std::max (passed, 1.0e-12));
+        return std::pow (10.0, std::clamp (strength * lossDb, 0.0, maxBoostDb) / 20.0);
+    }
+
+    // Roughly what the FIR does at this energy: it cannot resolve detail finer than a bin, so
+    // average across one (or, for line spectra, take the strongest point, as designFor does).
+    double binResponse (double energy, double binEnergy) const
+    {
+        const bool lines = isSpectral (tableSettings.mode);
+        double sum = 0.0, strongest = 0.0;
+        for (double offset : { -0.5, -0.25, 0.0, 0.25, 0.5 })
+        {
+            const double m = lookup (std::max (0.0, energy + offset * binEnergy));
+            sum += m * m;
+            strongest = std::max (strongest, m);
+        }
+        return lines ? strongest : std::sqrt (sum / 5.0);
     }
 
     double lookup (double energy) const
@@ -282,6 +370,11 @@ private:
     std::array<double, tableSize> table {};
     FilterSettings tableSettings;
     bool tableValid = false;
+    double makeup = 1.0;
+    std::array<Pitch, maxPitches> pitches {};
+    int numPitches = 0;
+    double referenceBarrierHz = 800.0;
+    bool makeupDirty = true;
     bool shapePending = false;  // width, gap or mode changed but the table has not caught up yet
     int samplesSinceTable = 0;
     int minSamplesBetweenTables = 960;

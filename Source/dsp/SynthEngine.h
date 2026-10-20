@@ -318,17 +318,31 @@ private:
                               + lfoOctaves - 4.0f * barrierDrop;
         currentFilter = s.filter;
         currentFilter.barrierHz = std::clamp (s.filter.barrierHz * std::exp2 ((double) octaves), 10.0, 20000.0);
-        filter.setSettings (currentFilter);
 
         const double osc2Ratio = std::exp2 ((s.osc2Semitones + s.osc2Cents / 100.0) / 12.0);
         const double pitchOffset = pitchBend * s.bendRange + lfoSemitones;
 
         std::array<double, numVoices> inc1 {}, inc2 {};
+        std::array<TunnelFilter::Pitch, numVoices * 2> playing {};
+        int numPlaying = 0;
         for (size_t i = 0; i < voices.size(); ++i)
         {
             inc1[i] = std::min (440.0 * std::exp2 ((voices[i].note - 69 + pitchOffset) / 12.0) / sampleRate, 0.49);
             inc2[i] = std::min (inc1[i] * osc2Ratio, 0.49);
+
+            if (voices[i].amp.isActive())
+            {
+                const double level = voices[i].velocity;
+                playing[(size_t) numPlaying++] = { inc1[i] * sampleRate, level * (1.0 - mix) };
+                playing[(size_t) numPlaying++] = { inc2[i] * sampleRate, level * mix };
+            }
         }
+        // The level make-up follows the panel barrier with key tracking and the envelope's
+        // sustain, but not the envelope's movement, the LFO or the joystick.
+        const double referenceOctaves = s.envAmountOctaves * s.filterSustain + s.keyTrack * (float) (lastNote - 60) / 12.0f;
+        const double referenceBarrier = std::clamp (s.filter.barrierHz * std::exp2 (referenceOctaves), 10.0, 20000.0);
+        filter.setLevelReference (playing.data(), numPlaying, referenceBarrier);
+        filter.setSettings (currentFilter);
 
         for (int n = 0; n < numSamples; ++n)
         {
@@ -353,7 +367,19 @@ private:
 
         const float gain = std::pow (10.0f, s.outputGainDb / 20.0f);
         for (int n = 0; n < numSamples; ++n)
-            out[n] *= gain;
+            out[n] = softClip (out[n] * gain);
+    }
+
+    // Leaves everything below -3 dBFS untouched and rounds off peaks above it, so the spiky
+    // waveforms a high-pass makes out of a sawtooth never hard-clip the output.
+    static float softClip (float x)
+    {
+        constexpr float knee = 0.7f;
+        const float magnitude = std::abs (x);
+        if (magnitude <= knee)
+            return x;
+        const float over = (magnitude - knee) / (1.0f - knee);
+        return std::copysign (knee + (1.0f - knee) * std::tanh (over), x);
     }
 
     double sampleRate = 48000.0;

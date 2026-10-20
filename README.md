@@ -38,6 +38,12 @@ modes, sharper lines). **Gap** is the space between barriers in the Resonant, Cr
 Band Gap modes and moves their peaks; it is dimmed when the mode doesn't use it.
 The filter envelope and key tracking move the barrier height in octaves.
 
+Modes like Tunnel, Crystal or the line spectra let through only a small part of a note's
+harmonics, so the filter adds make-up gain: it looks at the notes being played and the
+**Barrier** knob and makes up most (not all) of the level the mode takes away, up to 18 dB.
+The envelope, LFO and joystick are left out of that, so their sweeps keep their full depth.
+A soft clipper above −3 dBFS rounds off the occasional peak instead of hard-clipping.
+
 The layout is paraphonic: 8 voices with two oscillators (saw, square, triangle, sine) and an
 amp envelope each, all summed into one shared quantum filter. The filter envelope retriggers
 on every new note. An LFO can move the barrier, the oscillator mix or the pitch.
