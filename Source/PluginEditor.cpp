@@ -204,7 +204,7 @@ QuantumSynthEditor::Control* QuantumSynthEditor::addKnob (const juce::String& pa
     c->addAndMakeVisible (c->label);
     c->addAndMakeVisible (c->slider);
     c->addChildComponent (c->box);
-    c->sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (processor.parameters, paramId, c->slider);
+    c->sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (synth.parameters, paramId, c->slider);
     addAndMakeVisible (*c);
     controls.push_back (std::move (c));
     return controls.back().get();
@@ -218,20 +218,20 @@ QuantumSynthEditor::Control* QuantumSynthEditor::addChoice (const juce::String& 
     c->label.setJustificationType (juce::Justification::centred);
     c->label.setColour (juce::Label::textColourId, colours::text);
 
-    if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (processor.parameters.getParameter (paramId)))
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (synth.parameters.getParameter (paramId)))
         c->box.addItemList (param->choices, 1);
 
     c->addAndMakeVisible (c->label);
     c->addAndMakeVisible (c->box);
     c->addChildComponent (c->slider);
-    c->boxAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (processor.parameters, paramId, c->box);
+    c->boxAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (synth.parameters, paramId, c->box);
     addAndMakeVisible (*c);
     controls.push_back (std::move (c));
     return controls.back().get();
 }
 
 QuantumSynthEditor::QuantumSynthEditor (QuantumSynthProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), display (p),
+    : AudioProcessorEditor (&p), synth (p), display (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     addAndMakeVisible (display);
@@ -270,12 +270,12 @@ QuantumSynthEditor::~QuantumSynthEditor() = default;
 void QuantumSynthEditor::timerCallback()
 {
     // Show which synth parameter the last minilogue xd knob moved, so the mapping is easy to learn.
-    const int cc = processor.getLastXdControl();
+    const int cc = synth.getLastXdControl();
     if (cc != shownControl)
     {
         shownControl = cc;
         if (const auto* c = qs::xd::findControl (cc))
-            if (auto* param = processor.parameters.getParameter (c->paramId))
+            if (auto* param = synth.parameters.getParameter (c->paramId))
                 lastControl.setText (juce::String ("minilogue xd ") + c->panelName + " > " + param->getName (64),
                                      juce::dontSendNotification);
     }

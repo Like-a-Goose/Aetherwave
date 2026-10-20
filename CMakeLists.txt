@@ -19,7 +19,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG 8.0.4
+        GIT_TAG 8.0.16-security
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(JUCE)
 endif()
@@ -27,6 +27,7 @@ endif()
 juce_add_plugin(QuantumSynth
     COMPANY_NAME "Quantum Synth"
     PRODUCT_NAME "Quantum Synth"
+    BUNDLE_ID com.quantumsynth.QuantumSynth
     PLUGIN_MANUFACTURER_CODE Qntm
     PLUGIN_CODE Qsy1
     FORMATS VST3 Standalone

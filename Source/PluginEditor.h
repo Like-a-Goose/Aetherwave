@@ -56,7 +56,7 @@ private:
     void timerCallback() override;
     void enableMinilogueMidiInput();
 
-    QuantumSynthProcessor& processor;
+    QuantumSynthProcessor& synth;
     BarrierDisplay display;
     juce::MidiKeyboardComponent keyboard;
 
