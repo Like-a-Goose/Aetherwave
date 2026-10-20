@@ -43,78 +43,233 @@ void BarrierDisplay::paintHeading (juce::Graphics& g, juce::Rectangle<float>& ar
 
 void BarrierDisplay::paintPotential (juce::Graphics& g, juce::Rectangle<float> area)
 {
-    paintHeading (g, area, "Barrier and wavefunction");
+    if (qs::isSpectral (settings.mode))
+        paintLevels (g, area);
+    else
+        paintScattering (g, area);
+}
 
-    const bool twin = settings.mode == qs::FilterMode::resonantTunnel || settings.mode == qs::FilterMode::resonantReflect;
-    const double span = twin ? 2.0 * settings.width + settings.gap : settings.width;
-    const double margin = 6.0;
-    const double totalX = span + 2.0 * margin;
+// Scattering modes: the potential and the exact wavefunction of a particle at E = 0.6 V0
+// coming in from the left (solved with the same transfer matrices as the filter).
+void BarrierDisplay::paintScattering (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    paintHeading (g, area, "Potential and wavefunction");
 
-    const float baseY = area.getBottom() - 6.0f;
-    const float topY = area.getY() + 26.0f;
-    auto toScreenX = [&] (double x) { return area.getX() + (float) ((x + margin) / totalX) * area.getWidth(); };
-
-    // Barriers, height V0 = 1.
-    g.setColour (colours::barrier.withAlpha (0.45f));
-    auto drawBarrier = [&] (double x0)
+    qs::Potential potential;
+    if (settings.mode == qs::FilterMode::softTunnel)
     {
-        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (toScreenX (x0), topY, toScreenX (x0 + settings.width), baseY));
-    };
-    drawBarrier (0.0);
-    if (twin)
-        drawBarrier (settings.width + settings.gap);
-
-    g.setColour (colours::grid);
-    g.drawHorizontalLine ((int) baseY, area.getX(), area.getRight());
-
-    // Real part of a particle at E = 0.6 V0: incoming plus reflected on the left, decaying
-    // inside the barrier, and whatever tunnelled through on the right.
-    qs::BarrierGeometry geometry;
-    geometry.width = settings.width;
-    geometry.gap = settings.gap;
-    geometry.shape = twin ? qs::BarrierShape::twin : qs::BarrierShape::single;
-    const double energy = 0.6;
-    const auto result = qs::scatter (energy, geometry);
-
-    const float midY = (topY + baseY) * 0.5f;
-    const float amp = (baseY - topY) * 0.3f;
-    const double k = std::sqrt (energy);
-    const double kappa = std::sqrt (1.0 - energy);
-
-    juce::Path psi;
-    const int steps = 300;
-    for (int i = 0; i <= steps; ++i)
-    {
-        const double x = -margin + totalX * i / steps;
-        double y;
-
-        if (x < 0.0)
-            y = std::cos (k * x * 4.0) * (1.0 + result.reflected) * 0.5;
-        else if (x > span)
-            y = std::cos (k * (x - span) * 4.0) * result.transmitted;
-        else
+        // Draw the smooth barrier as a fine staircase of the same sech^2 shape.
+        const double alpha = qs::softAlpha (settings.width), half = 3.0 / alpha;
+        const int slices = qs::Potential::maxSegments;
+        for (int n = 0; n < slices; ++n)
         {
-            // Inside the barrier region: exponential decay towards the transmitted amplitude.
-            const double depth = twin ? std::min (x, span - x) / span * 2.0 : x / span;
-            const double decayed = std::exp (-kappa * (twin ? std::min (x, span - x) : x));
-            y = juce::jmap (depth, decayed, (double) result.transmitted) * ((1.0 + result.reflected) * 0.5);
+            const double c = std::cosh (alpha * (-half + (n + 0.5) * 2.0 * half / slices));
+            potential.add ({ 2.0 * half / slices, 1.0 / (c * c) });
         }
-
-        const auto px = toScreenX (x);
-        const auto py = midY - (float) y * amp;
-        if (i == 0)
-            psi.startNewSubPath (px, py);
-        else
-            psi.lineTo (px, py);
+    }
+    else
+    {
+        potential = qs::potentialFor (settings.mode, settings.width, settings.gap);
     }
 
-    g.setColour (colours::wave);
-    g.strokePath (psi, juce::PathStrokeType (2.2f));
+    const double span = potential.length();
+    const double margin = juce::jmax (6.0, span * 0.25);
+    const double x0 = -margin, x1 = span + margin;
+    const double energy = 0.6;
 
+    // Vertical scale: from a bit below V = 0 up to V0 (a deep well runs off the bottom).
+    double vMin = -0.45;
+    for (int j = 0; j < potential.count; ++j)
+        vMin = juce::jlimit (-1.0, vMin, potential.segments[(size_t) j].potential);
+    const float potentialTop = area.getY() + 26.0f, potentialBottom = area.getBottom() - 4.0f;
+    auto toScreenX = [&] (double x) { return area.getX() + (float) ((x - x0) / (x1 - x0)) * area.getWidth(); };
+    auto toScreenY = [&] (double v)
+    {
+        return juce::jmap ((float) juce::jmax (v, vMin - 0.2), (float) vMin, 1.0f, potentialBottom, potentialTop);
+    };
+    const float zeroY = toScreenY (0.0);
+
+    // The potential, filled down to (or up to) V = 0.
+    juce::Path shape;
+    shape.startNewSubPath (toScreenX (x0), zeroY);
+    double x = 0.0;
+    shape.lineTo (toScreenX (0.0), zeroY);
+    for (int j = 0; j < potential.count; ++j)
+    {
+        const auto& seg = potential.segments[(size_t) j];
+        shape.lineTo (toScreenX (x), toScreenY (seg.potential));
+        x += seg.length;
+        shape.lineTo (toScreenX (x), toScreenY (seg.potential));
+    }
+    shape.lineTo (toScreenX (x), toScreenY (potential.right));
+    shape.lineTo (toScreenX (x1), toScreenY (potential.right));
+    shape.lineTo (toScreenX (x1), zeroY);
+    shape.closeSubPath();
+    g.setColour (colours::barrier.withAlpha (0.45f));
+    g.fillPath (shape);
+
+    g.setColour (colours::grid);
+    g.drawHorizontalLine ((int) zeroY, area.getX(), area.getRight());
+    const float energyY = toScreenY (energy);
+    const float dashes[] = { 4.0f, 4.0f };
+    g.drawDashedLine ({ area.getX(), energyY, area.getRight(), energyY }, dashes, 2, 1.0f);
+
+    // Real part of psi, drawn around the particle's energy line.
+    std::vector<double> xs;
+    const int steps = juce::jmax (100, (int) area.getWidth() * 2);
+    for (int i = 0; i <= steps; ++i)
+        xs.push_back (x0 + (x1 - x0) * i / steps);
+    const auto psi = qs::wavefunction (energy, potential, xs);
+
+    double peak = 1.0e-9;
+    for (double v : psi)
+        peak = std::max (peak, std::abs (v));
+    const float amplitude = juce::jmin (energyY - area.getY() - 24.0f, area.getBottom() - energyY - 2.0f) / (float) peak;
+
+    juce::Path wave;
+    for (size_t i = 0; i < psi.size(); ++i)
+    {
+        const auto point = juce::Point<float> (toScreenX (xs[i]), energyY - (float) psi[i] * amplitude);
+        if (i == 0)
+            wave.startNewSubPath (point);
+        else
+            wave.lineTo (point);
+    }
+    g.setColour (colours::wave);
+    g.strokePath (wave, juce::PathStrokeType (2.2f));
+
+    const auto result = settings.mode == qs::FilterMode::softTunnel
+                            ? qs::scatterSoft (energy, qs::softAlpha (settings.width))
+                            : qs::scatter (energy, potential);
     g.setColour (colours::text);
     g.setFont (juce::FontOptions (14.0f));
     g.drawText ("tunnelled " + juce::String (100.0 * result.transmitted * result.transmitted, 1) + "%",
-                area.withTop (area.getY()).withHeight (18.0f), juce::Justification::topRight);
+                area.withHeight (18.0f), juce::Justification::topRight);
+}
+
+// Bound modes: the confining potential, its energy levels and (for the box and the
+// oscillator) the first few eigenstates drawn on their levels.
+void BarrierDisplay::paintLevels (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    paintHeading (g, area, "Energy levels");
+    area.removeFromTop (6.0f);
+    area.removeFromBottom (4.0f);
+
+    const auto mode = settings.mode;
+    const int levels = mode == qs::FilterMode::hydrogen ? 7 : 4;
+
+    // Energy of level n, and the energy range shown (bottom of the potential to the top).
+    auto levelEnergy = [mode] (int n) -> double
+    {
+        if (mode == qs::FilterMode::box) return (double) (n + 1) * (n + 1);
+        if (mode == qs::FilterMode::oscillator) return n + 0.5;
+        return -1.0 / ((double) (n + 1) * (n + 1));  // hydrogen, ionisation limit at 0
+    };
+    const double eLow = mode == qs::FilterMode::hydrogen ? -1.15 : 0.0;
+    const double eHigh = mode == qs::FilterMode::box ? 18.0 : (mode == qs::FilterMode::oscillator ? 4.4 : 0.15);
+    auto toY = [&] (double e) { return area.getBottom() - (float) ((e - eLow) / (eHigh - eLow)) * area.getHeight(); };
+    auto toX = [&] (double u) { return area.getCentreX() + (float) u * area.getWidth() * 0.5f; };  // u in -1..1
+
+    // The potential.
+    g.setColour (colours::barrier.withAlpha (0.8f));
+    juce::Path wall;
+    if (mode == qs::FilterMode::box)
+    {
+        const float left = toX (-0.7), right = toX (0.7);
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (left - 6.0f, area.getY(), left, area.getBottom()));
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (right, area.getY(), right + 6.0f, area.getBottom()));
+        g.drawHorizontalLine ((int) area.getBottom(), left, right);
+    }
+    else
+    {
+        for (int i = 0; i <= 200; ++i)
+        {
+            const double u = -1.0 + 2.0 * i / 200.0;
+            const double v = mode == qs::FilterMode::oscillator ? 4.4 * u * u
+                                                                : -0.08 / juce::jmax (0.012, std::abs (u));
+            const auto point = juce::Point<float> (toX (u), toY (juce::jlimit (eLow, eHigh, v)));
+            if (i == 0)
+                wall.startNewSubPath (point);
+            else
+                wall.lineTo (point);
+        }
+        g.strokePath (wall, juce::PathStrokeType (2.0f));
+    }
+
+    // Levels, and eigenstates drawn on them.
+    for (int n = 0; n < levels; ++n)
+    {
+        const double e = levelEnergy (n);
+        const float y = toY (e);
+
+        // How far the level reaches: the classically allowed region.
+        double reach = 0.7;
+        if (mode == qs::FilterMode::oscillator)
+            reach = std::sqrt (e / 4.4);
+        else if (mode == qs::FilterMode::hydrogen)
+            reach = juce::jmin (1.0, 0.08 / -e);
+
+        g.setColour (colours::label.withAlpha (0.6f));
+        g.drawHorizontalLine ((int) y, toX (-reach), toX (reach));
+
+        if (mode == qs::FilterMode::hydrogen)
+            continue;
+
+        std::vector<juce::Point<double>> samples;  // (u, psi)
+        for (int i = 0; i <= 160; ++i)
+        {
+            const double u = -1.0 + 2.0 * i / 160.0;
+            double psi;
+            if (mode == qs::FilterMode::box)
+            {
+                if (std::abs (u) > 0.7)
+                    continue;
+                psi = std::sin ((n + 1) * 3.14159265358979323846 * (u + 0.7) / 1.4);
+            }
+            else
+            {
+                // Hermite-Gauss functions. The parabola drawn is 4.4 u^2 = xi^2 / 2 in units of hbar omega.
+                if (4.4 * u * u > e + 0.8)
+                    continue;  // stop a little past the turning points, where the tails die out
+                const double xi = u * std::sqrt (8.8);
+                double h0 = 1.0, h1 = 2.0 * xi;
+                double h = n == 0 ? h0 : h1;
+                for (int k = 1; k < n; ++k)
+                {
+                    h = 2.0 * xi * h1 - 2.0 * k * h0;
+                    h0 = h1;
+                    h1 = h;
+                }
+                psi = h * std::exp (-0.5 * xi * xi);
+            }
+            samples.push_back ({ u, psi });
+        }
+
+        double peak = 1.0e-9;
+        for (const auto& p : samples)
+            peak = std::max (peak, std::abs (p.y));
+        const float amplitude = (float) (toY (0.0) - toY (mode == qs::FilterMode::box ? 1.4 : 0.4));
+
+        juce::Path state;
+        for (size_t i = 0; i < samples.size(); ++i)
+        {
+            const auto point = juce::Point<float> (toX (samples[i].x), y - (float) (samples[i].y / peak) * amplitude);
+            if (i == 0)
+                state.startNewSubPath (point);
+            else
+                state.lineTo (point);
+        }
+        g.setColour (colours::wave);
+        g.strokePath (state, juce::PathStrokeType (2.0f));
+    }
+
+    g.setColour (colours::text);
+    g.setFont (juce::FontOptions (14.0f));
+    const char* rule = mode == qs::FilterMode::box ? "lines at n\u00b2 \u00d7 barrier"
+                     : mode == qs::FilterMode::oscillator ? "lines at (n + \u00bd) \u00d7 barrier"
+                                                          : "lines at (1 \u2212 1/n\u00b2) \u00d7 barrier";
+    g.drawText (juce::String (juce::CharPointer_UTF8 (rule)), area.withHeight (18.0f).translated (0.0f, -28.0f),
+                juce::Justification::topRight);
 }
 
 void BarrierDisplay::paintResponse (juce::Graphics& g, juce::Rectangle<float> area)
@@ -299,9 +454,12 @@ QuantumSynthEditor::QuantumSynthEditor (QuantumSynthProcessor& p)
     addSection ("OSCILLATORS", colours::oscillators,
                 { addChoice ("osc1Wave", "Osc 1 wave"), addChoice ("osc2Wave", "Osc 2 wave"),
                   addKnob ("osc2Semi", "Semitones"), addKnob ("osc2Fine", "Fine"), addKnob ("oscMix", "Mix") });
+    auto* modeChoice = addChoice ("filterMode", "Mode");
+    modeChoice->preferredWidth = 172;  // room for "Harmonic Oscillator"
+    gapControl = addKnob ("gap", "Gap");
     addSection ("QUANTUM FILTER", colours::filter,
-                { addChoice ("filterMode", "Mode"), addKnob ("barrier", "Barrier"), addKnob ("width", "Width"),
-                  addKnob ("gap", "Gap"), addKnob ("envAmount", "Env amount"), addKnob ("keyTrack", "Key track") });
+                { modeChoice, addKnob ("barrier", "Barrier"), addKnob ("width", "Width"),
+                  gapControl, addKnob ("envAmount", "Env amount"), addKnob ("keyTrack", "Key track") });
     addSection ("AMP ENVELOPE", colours::ampEnvelope,
                 { addKnob ("ampA", "Attack"), addKnob ("ampD", "Decay"), addKnob ("ampS", "Sustain"), addKnob ("ampR", "Release") });
     addSection ("FILTER ENVELOPE", colours::filterEnvelope,
@@ -348,6 +506,10 @@ void QuantumSynthEditor::timerCallback()
                 repaint (statusPill.toFloat().transformedBy (juce::AffineTransform::scale (scale)).getSmallestIntegerContainer());
             }
     }
+
+    // Gap only matters for modes with more than one barrier.
+    const auto mode = (qs::FilterMode) (int) synth.parameters.getRawParameterValue ("filterMode")->load();
+    gapControl->setAlpha (qs::usesGap (mode) ? 1.0f : 0.4f);
 
     if (++midiCheckCounter >= 20)  // every 2 seconds
     {

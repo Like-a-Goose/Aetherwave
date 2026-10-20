@@ -4,7 +4,11 @@
 namespace
 {
 const juce::StringArray waveNames { "Saw", "Square", "Triangle", "Sine" };
-const juce::StringArray modeNames { "Tunnel", "Reflect", "Resonant Tunnel", "Resonant Reflect" };
+// New modes are appended so saved projects keep their mode. The minilogue xd reaches them in
+// banks of four (MULTI TYPE picks the bank, VCO1 OCTAVE the mode), so keep groups of four.
+const juce::StringArray modeNames { "Tunnel", "Reflect", "Resonant Tunnel", "Resonant Reflect",
+                                    "Soft Tunnel", "Step", "Quantum Well", "Crystal",
+                                    "Band Gap", "Particle in a Box", "Harmonic Oscillator", "Hydrogen" };
 const juce::StringArray lfoWaveNames { "Square", "Triangle", "Saw" };
 const juce::StringArray lfoTargetNames { "Barrier", "Mix", "Pitch" };
 const juce::StringArray ccMapNames { "Off", "minilogue xd" };

@@ -15,6 +15,8 @@ public:
 private:
     void timerCallback() override;
     void paintPotential (juce::Graphics& g, juce::Rectangle<float> area);
+    void paintScattering (juce::Graphics& g, juce::Rectangle<float> area);
+    void paintLevels (juce::Graphics& g, juce::Rectangle<float> area);
     void paintResponse (juce::Graphics& g, juce::Rectangle<float> area);
     static void paintHeading (juce::Graphics& g, juce::Rectangle<float>& area, const juce::String& text);
 
@@ -79,6 +81,7 @@ private:
     std::vector<std::unique_ptr<Control>> controls;
     std::vector<Section> sections;
 
+    Control* gapControl = nullptr;
     juce::Rectangle<int> header, statusPill;
     juce::Label lastControl;
     int shownControl = -1;

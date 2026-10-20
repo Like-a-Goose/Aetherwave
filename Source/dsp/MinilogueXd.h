@@ -17,7 +17,8 @@ enum class Kind
     knob,         // 10-bit knob: CC63 carries the low 3 bits just before the knob's own CC
     vcoWave,      // SQR / TRI / SAW switch
     vcoOctave,    // 16' / 8' / 4' / 2' switch as an oscillator transpose
-    modeSwitch,   // 16' / 8' / 4' / 2' switch picking one of the four filter modes
+    modeSwitch,   // 16' / 8' / 4' / 2' switch picking a filter mode within the current bank
+    modeBank,     // NOISE / VPM / USR switch picking a bank of four filter modes
     keyTrack,     // 0% / 50% / 100% switch
     threeWay,     // any other 3-position switch, matching the parameter's choice order
     level         // VCO 1 or VCO 2 level, combined into the oscillator mix
@@ -31,11 +32,12 @@ struct Control
     Kind kind;
 };
 
-constexpr std::array<Control, 22> controls { {
+constexpr std::array<Control, 23> controls { {
     { 43, "CUTOFF", "barrier", Kind::knob },
     { 44, "RESONANCE", "width", Kind::knob },
     { 54, "MULTI SHAPE", "gap", Kind::knob },
     { 48, "VCO1 OCTAVE", "filterMode", Kind::modeSwitch },
+    { 53, "MULTI TYPE", "filterMode", Kind::modeBank },
     { 83, "KEY TRACK", "keyTrack", Kind::keyTrack },
     { 22, "EG INT", "envAmount", Kind::knob },
     { 20, "EG ATTACK", "filtA", Kind::knob },
@@ -118,8 +120,14 @@ public:
             case Kind::vcoOctave:
                 return Change { c, false, (float) ((fourWay (value) - 1) * 12) };  // 8' is in tune with VCO 1
 
+            // Filter mode = bank * 4 + position: the two switches together reach all 12 modes.
             case Kind::modeSwitch:
-                return Change { c, false, (float) fourWay (value) };
+                modePosition = fourWay (value);
+                return Change { c, false, (float) (modeBank * 4 + modePosition) };
+
+            case Kind::modeBank:
+                modeBank = threeWay (value);
+                return Change { c, false, (float) (modeBank * 4 + modePosition) };
 
             case Kind::keyTrack:
                 return Change { c, false, 0.5f * (float) threeWay (value) };
@@ -143,6 +151,8 @@ public:
     {
         pendingLsb = 0;
         levels = { 1.0f, 1.0f };
+        modeBank = 0;
+        modePosition = 1;
     }
 
 private:
@@ -151,6 +161,7 @@ private:
 
     int pendingLsb = 0;
     std::array<float, 2> levels { 1.0f, 1.0f };
+    int modeBank = 0, modePosition = 1;  // the default mode, Reflect
 };
 
 } // namespace xd
