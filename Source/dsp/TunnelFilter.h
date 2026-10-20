@@ -65,7 +65,10 @@ public:
     {
         sampleRate = newSampleRate;
         reset();
+        minSamplesBetweenTables = (int) (sampleRate / maxTablesPerSecond);
+        tableValid = false;
         designFor (settings);
+        samplesSinceTable = minSamplesBetweenTables;
         previous = current;
     }
 
@@ -77,7 +80,8 @@ public:
 
     void setSettings (const FilterSettings& newSettings)
     {
-        if (newSettings.isCloseTo (settings) && ! needsDesign)
+        const bool deferredShapeDue = shapePending && samplesSinceTable >= minSamplesBetweenTables;
+        if (newSettings.isCloseTo (settings) && ! needsDesign && ! deferredShapeDue)
             return;
 
         // If the last change has not been heard yet, keep fading from what is actually playing.
@@ -92,6 +96,7 @@ public:
     {
         const bool fading = crossfadePending;
         crossfadePending = false;
+        samplesSinceTable += numSamples;
 
         for (int n = 0; n < numSamples; ++n)
         {
@@ -133,8 +138,21 @@ private:
         // The response only depends on f / barrierHz, so sweeping the barrier just reads a
         // table built for the current width, gap and mode. Solving the physics per bin on
         // every envelope step would cost several times more CPU.
+        // A knob turned on a controller (RESONANCE on a minilogue xd, say) changes the shape on
+        // every step, so rebuilds are capped; in between, the last shape stays in use.
+        shapePending = false;
         if (! tableValid || ! sameShape (s, tableSettings))
-            buildTable (s);
+        {
+            if (! tableValid || samplesSinceTable >= minSamplesBetweenTables)
+            {
+                buildTable (s);
+                samplesSinceTable = 0;
+            }
+            else
+            {
+                shapePending = true;
+            }
+        }
 
         const int fftSize = designer.getFftSize();
         for (int k = 0; k < designer.getNumBins(); ++k)
@@ -144,6 +162,7 @@ private:
     }
 
     static constexpr int tableSize = 2048;
+    static constexpr double maxTablesPerSecond = 50.0;
     static constexpr double tableMinEnergy = 1.0e-3, tableMaxEnergy = 4.0e3;
 
     void buildTable (const FilterSettings& s)
@@ -177,6 +196,9 @@ private:
     std::array<double, tableSize> table {};
     FilterSettings tableSettings;
     bool tableValid = false;
+    bool shapePending = false;  // width, gap or mode changed but the table has not caught up yet
+    int samplesSinceTable = 0;
+    int minSamplesBetweenTables = 960;
 
     MinPhaseDesigner designer;
     std::vector<double> magnitudes;

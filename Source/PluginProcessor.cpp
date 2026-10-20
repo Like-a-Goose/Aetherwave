@@ -5,6 +5,9 @@ namespace
 {
 const juce::StringArray waveNames { "Saw", "Square", "Triangle", "Sine" };
 const juce::StringArray modeNames { "Tunnel", "Reflect", "Resonant Tunnel", "Resonant Reflect" };
+const juce::StringArray lfoWaveNames { "Square", "Triangle", "Saw" };
+const juce::StringArray lfoTargetNames { "Barrier", "Mix", "Pitch" };
+const juce::StringArray ccMapNames { "Off", "minilogue xd" };
 
 juce::AudioParameterFloatAttributes shown (int decimals, const juce::String& unit = {})
 {
@@ -66,6 +69,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout QuantumSynthProcessor::creat
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "filtS", 1 }, "Filter Sustain", NormalisableRange<float> (0.0f, 1.0f), 0.2f, shown (2)));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "filtR", 1 }, "Filter Release", timeRange (5.0f), 0.5f, shown (3, "s")));
 
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "lfoWave", 1 }, "LFO Wave", lfoWaveNames, 1));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "lfoTarget", 1 }, "LFO Target", lfoTargetNames, 0));
+    NormalisableRange<float> lfoRateRange (0.05f, 20.0f);
+    lfoRateRange.setSkewForCentre (2.0f);
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "lfoRate", 1 }, "LFO Rate", lfoRateRange, 4.0f, shown (2, "Hz")));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "lfoAmount", 1 }, "LFO Amount",
+                                                        NormalisableRange<float> (0.0f, 1.0f), 0.0f, shown (2)));
+
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "ccMap", 1 }, "CC Map", ccMapNames, 1));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { "bendRange", 1 }, "Bend Range", 0, 12, 2));
+
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "gain", 1 }, "Output Gain",
                                                         NormalisableRange<float> (-36.0f, 6.0f), -6.0f,
                                                         shown (1, "dB")));
@@ -106,6 +120,11 @@ qs::SynthSettings QuantumSynthProcessor::readSettings() const
     s.filterDecay = value ("filtD");
     s.filterSustain = value ("filtS");
     s.filterRelease = value ("filtR");
+    s.lfoWave = (qs::LfoWave) (int) value ("lfoWave");
+    s.lfoTarget = (qs::LfoTarget) (int) value ("lfoTarget");
+    s.lfoRate = value ("lfoRate");
+    s.lfoAmount = value ("lfoAmount");
+    s.bendRange = value ("bendRange");
     s.outputGainDb = value ("gain");
     return s;
 }
@@ -114,6 +133,8 @@ void QuantumSynthProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
 {
     engine.prepare (sampleRate);
     engine.setSettings (readSettings());
+    engine.resetControllers();
+    xdDecoder.reset();
     mono.assign ((size_t) juce::jmax (1, samplesPerBlock), 0.0f);
     keyboardState.reset();
 }
@@ -153,6 +174,12 @@ void QuantumSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             engine.noteOff (msg.getNoteNumber());
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
             engine.allNotesOff();
+        else if (msg.isPitchWheel())
+            engine.setPitchBend ((float) (msg.getPitchWheelValue() - 8192) / 8192.0f);
+        else if (msg.isResetAllControllers())
+            engine.resetControllers();
+        else if (msg.isController())
+            handleController (msg.getControllerNumber(), msg.getControllerValue());
     }
 
     if (position < numSamples)
@@ -162,6 +189,34 @@ void QuantumSynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         buffer.copyFrom (ch, 0, mono.data(), numSamples);
 
     liveBarrierHz.store (engine.getCurrentFilterSettings().barrierHz);
+}
+
+void QuantumSynthProcessor::handleController (int cc, int value)
+{
+    switch (cc)
+    {
+        case qs::xd::joystickUpController:   engine.setModWheel ((float) value / 127.0f); return;
+        case qs::xd::joystickDownController: engine.setBarrierDrop ((float) value / 127.0f); return;
+        case qs::xd::damperController:       engine.setSustainPedal (value >= 64); return;
+        default: break;
+    }
+
+    if ((int) parameters.getRawParameterValue ("ccMap")->load() == 0)
+        return;
+
+    const auto change = xdDecoder.handle (cc, value);
+    if (! change)
+        return;
+
+    if (auto* param = parameters.getParameter (change->control->paramId))
+    {
+        const float normalised = change->normalised ? change->value : param->convertTo0to1 (change->value);
+        param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, normalised));
+
+        // Apply it from this point in the block rather than from the next block.
+        engine.setSettings (readSettings());
+        lastXdControl.store (change->control->cc);
+    }
 }
 
 juce::AudioProcessorEditor* QuantumSynthProcessor::createEditor()
