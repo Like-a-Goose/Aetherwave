@@ -361,6 +361,8 @@ void QuantumSynthEditor::Control::resized()
 {
     auto area = getLocalBounds();
     label.setBounds (area.removeFromTop (labelHeight));
+    if (hint.isVisible())
+        hint.setBounds (area.removeFromBottom (hintHeight));
 
     // A drop-down sits where a knob would, so labels and controls line up across a row.
     if (box.isVisible())
@@ -389,11 +391,9 @@ void QuantumSynthEditor::Section::layOutControls (juce::Rectangle<int> area) con
         c->setBounds (area.removeFromLeft (c->preferredWidth + extra).withSizeKeepingCentre (c->preferredWidth, area.getHeight()));
 }
 
-void QuantumSynthEditor::addSection (const juce::String& title, juce::Colour accent, std::vector<Control*> sectionControls)
+void QuantumSynthEditor::addSection (const juce::String& title, const juce::Colour& accent, std::vector<Control*> sectionControls)
 {
-    for (auto* c : sectionControls)
-        c->slider.setColour (juce::Slider::rotarySliderFillColourId, accent);
-    sections.push_back ({ title, accent, std::move (sectionControls), {} });
+    sections.push_back ({ title, &accent, std::move (sectionControls), {}, {}, {} });
 }
 
 //==============================================================================
@@ -541,12 +541,20 @@ void PresetBar::finishSave (bool commit)
 }
 
 //==============================================================================
-QuantumSynthEditor::Control* QuantumSynthEditor::addKnob (const juce::String& paramId, const juce::String& name)
+QuantumSynthEditor::Control* QuantumSynthEditor::addKnob (const juce::String& paramId, const juce::String& name,
+                                                         const juce::String& xdName, const juce::String& xdHint)
 {
     auto c = std::make_unique<Control>();
+    c->name = name;
+    c->xdName = xdName.isEmpty() ? name : xdName;
+    c->xdHint = xdHint;
     c->label.setText (name, juce::dontSendNotification);
     c->label.setJustificationType (juce::Justification::centred);
     c->label.setFont (juce::FontOptions (15.0f));
+    c->hint.setText (xdHint, juce::dontSendNotification);
+    c->hint.setJustificationType (juce::Justification::centred);
+    c->hint.setFont (juce::FontOptions (12.5f));
+    c->addChildComponent (c->hint);
     c->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, c->preferredWidth, Control::valueHeight);
     c->addAndMakeVisible (c->label);
     c->addAndMakeVisible (c->slider);
@@ -558,13 +566,21 @@ QuantumSynthEditor::Control* QuantumSynthEditor::addKnob (const juce::String& pa
     return controls.back().get();
 }
 
-QuantumSynthEditor::Control* QuantumSynthEditor::addChoice (const juce::String& paramId, const juce::String& name)
+QuantumSynthEditor::Control* QuantumSynthEditor::addChoice (const juce::String& paramId, const juce::String& name,
+                                                           const juce::String& xdName, const juce::String& xdHint)
 {
     auto c = std::make_unique<Control>();
+    c->name = name;
+    c->xdName = xdName.isEmpty() ? name : xdName;
+    c->xdHint = xdHint;
     c->preferredWidth = 128;
     c->label.setText (name, juce::dontSendNotification);
     c->label.setJustificationType (juce::Justification::centred);
     c->label.setFont (juce::FontOptions (15.0f));
+    c->hint.setText (xdHint, juce::dontSendNotification);
+    c->hint.setJustificationType (juce::Justification::centred);
+    c->hint.setFont (juce::FontOptions (12.5f));
+    c->addChildComponent (c->hint);
 
     if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (synth.parameters.getParameter (paramId)))
         c->box.addItemList (param->choices, 1);
@@ -579,60 +595,320 @@ QuantumSynthEditor::Control* QuantumSynthEditor::addChoice (const juce::String& 
     return controls.back().get();
 }
 
+namespace
+{
+// Per-user settings shared by every instance: the theme and the laptop keyboard's octave.
+juce::PropertiesFile::Options userSettingsOptions()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName = "Quantum Synth";
+   #if JUCE_LINUX
+    options.folderName = ".config/Quantum Synth";  // otherwise it lands in the home folder itself
+   #else
+    options.folderName = "Quantum Synth";
+   #endif
+    options.filenameSuffix = ".settings";
+    options.osxLibrarySubFolder = "Application Support";
+    options.millisecondsBeforeSaving = -1;  // saved straight away instead
+    return options;
+}
+} // namespace
+
 QuantumSynthEditor::QuantumSynthEditor (QuantumSynthProcessor& p)
     : AudioProcessorEditor (&p), synth (p), display (p), presetBar (p.presets),
-      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
+      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard),
+      laptopKeys (p.keyboardState), settings (userSettingsOptions())
 {
     setLookAndFeel (&lookAndFeel);
 
     addAndMakeVisible (display);
     addAndMakeVisible (presetBar);
+    addAndMakeVisible (themeButton);
     addAndMakeVisible (keyboard);
     keyboard.setAvailableRange (24, 96);
     keyboard.setLowestVisibleKey (24);
-    keyboard.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xffe4e7ee));
-    keyboard.setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff1b1f2a));
-    keyboard.setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour (0xff9aa1b2));
-    keyboard.setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, colours::wave.withAlpha (0.3f));
-    keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, colours::wave.withAlpha (0.8f));
-    keyboard.setColour (juce::MidiKeyboardComponent::shadowColourId, juce::Colours::transparentBlack);
 
-    addSection ("OSCILLATORS", colours::oscillators,
-                { addChoice ("osc1Wave", "Osc 1 wave"), addChoice ("osc2Wave", "Osc 2 wave"),
-                  addKnob ("osc2Semi", "Semitones"), addKnob ("osc2Fine", "Fine"), addKnob ("oscMix", "Mix") });
-    auto* modeChoice = addChoice ("filterMode", "Mode");
+    themeButton.setTooltip ("Change the look of the synth");
+    themeButton.onClick = [this] { showThemeMenu(); };
+
+    auto* osc1Wave = addChoice ("osc1Wave", "Osc 1 wave", "WAVE", "osc 1 wave");
+    auto* osc2Wave = addChoice ("osc2Wave", "Osc 2 wave", "WAVE", "osc 2 wave");
+    auto* osc2Semi = addKnob ("osc2Semi", "Semitones", "OCTAVE", "osc 2 semitones");
+    auto* osc2Fine = addKnob ("osc2Fine", "Fine", "PITCH", "osc 2 fine tune");
+    auto* oscMix = addKnob ("oscMix", "Mix", "VCO 1 / 2", "osc mix");
+    auto* modeChoice = addChoice ("filterMode", "Mode", "OCTAVE", "filter mode");
     modeChoice->preferredWidth = 172;  // room for "Harmonic Oscillator"
-    gapControl = addKnob ("gap", "Gap");
-    addSection ("QUANTUM FILTER", colours::filter,
-                { modeChoice, addKnob ("barrier", "Barrier"), addKnob ("width", "Width"),
-                  gapControl, addKnob ("envAmount", "Env amount"), addKnob ("keyTrack", "Key track") });
-    addSection ("AMP ENVELOPE", colours::ampEnvelope,
-                { addKnob ("ampA", "Attack"), addKnob ("ampD", "Decay"), addKnob ("ampS", "Sustain"), addKnob ("ampR", "Release") });
-    addSection ("FILTER ENVELOPE", colours::filterEnvelope,
-                { addKnob ("filtA", "Attack"), addKnob ("filtD", "Decay"), addKnob ("filtS", "Sustain"), addKnob ("filtR", "Release") });
-    addSection ("LFO", colours::lfo,
-                { addChoice ("lfoWave", "Wave"), addChoice ("lfoTarget", "Target"),
-                  addKnob ("lfoRate", "Rate"), addKnob ("lfoAmount", "Amount") });
-    addSection ("MIDI AND OUTPUT", colours::midi,
-                { addChoice ("ccMap", "CC map"), addKnob ("bendRange", "Bend"), addKnob ("gain", "Gain") });
+    auto* barrier = addKnob ("barrier", "Barrier", "CUTOFF", "barrier height");
+    auto* width = addKnob ("width", "Width", "RESONANCE", "barrier width");
+    gapControl = addKnob ("gap", "Gap", "SHAPE", "barrier gap");
+    auto* envAmount = addKnob ("envAmount", "Env amount", "INT", "env amount");
+    auto* keyTrack = addKnob ("keyTrack", "Key track", "KEY TRACK", "key tracking");
+    auto* ampA = addKnob ("ampA", "Attack", "ATTACK");
+    auto* ampD = addKnob ("ampD", "Decay", "DECAY");
+    auto* ampS = addKnob ("ampS", "Sustain", "SUSTAIN");
+    auto* ampR = addKnob ("ampR", "Release", "RELEASE");
+    auto* filtA = addKnob ("filtA", "Attack", "ATTACK");
+    auto* filtD = addKnob ("filtD", "Decay", "DECAY");
+    auto* filtS = addKnob ("filtS", "Sustain", "SUSTAIN", "no xd knob");
+    auto* filtR = addKnob ("filtR", "Release", "RELEASE", "no xd knob");
+    auto* lfoWave = addChoice ("lfoWave", "Wave", "WAVE");
+    auto* lfoTarget = addChoice ("lfoTarget", "Target", "TARGET");
+    auto* lfoRate = addKnob ("lfoRate", "Rate", "RATE");
+    auto* lfoAmount = addKnob ("lfoAmount", "Amount", "INT", "amount");
+    auto* ccMap = addChoice ("ccMap", "CC map", "CC MAP");
+    auto* bend = addKnob ("bendRange", "Bend", "BEND", "joystick range");
+    auto* gain = addKnob ("gain", "Gain", "MASTER", "output gain");
+
+    addSection ("OSCILLATORS", colours::oscillators, { osc1Wave, osc2Wave, osc2Semi, osc2Fine, oscMix });
+    addSection ("QUANTUM FILTER", colours::filter, { modeChoice, barrier, width, gapControl, envAmount, keyTrack });
+    addSection ("AMP ENVELOPE", colours::ampEnvelope, { ampA, ampD, ampS, ampR });
+    addSection ("FILTER ENVELOPE", colours::filterEnvelope, { filtA, filtD, filtS, filtR });
+    addSection ("LFO", colours::lfo, { lfoWave, lfoTarget, lfoRate, lfoAmount });
+    addSection ("MIDI AND OUTPUT", colours::midi, { ccMap, bend, gain });
+
+    // The same controls arranged like the minilogue xd's front panel: each sits where the
+    // xd knob or switch that moves it is. Rows run VCO 1 / VCO 2 / MULTI ENGINE on the left
+    // and AMP EG / EG / LFO on the right, as on the xd. Control order within a multi-row
+    // section is row by row; nullptr leaves a slot empty.
+    xdSections = {
+        { "MASTER", &colours::midi, { gain, bend, ccMap }, {}, {}, {} },
+        { "VCO / MULTI ENGINE", &colours::oscillators, { osc1Wave, modeChoice, nullptr, osc2Wave, osc2Semi, osc2Fine, nullptr, gapControl, nullptr },
+          {}, { "VCO 1", "VCO 2", "MULTI" }, "TYPE picks the mode bank" },
+        { "MIXER", &colours::oscillators, { oscMix }, {}, {}, {} },
+        { "FILTER", &colours::filter, { barrier, width, keyTrack }, {}, {}, {} },
+        { "EG / LFO", &colours::ampEnvelope, { ampA, ampD, ampS, ampR, filtA, filtD, filtS, filtR, envAmount, lfoWave, lfoTarget, lfoRate, lfoAmount },
+          {}, { "AMP EG", "EG", "LFO" }, {} },
+    };
 
     lastControl.setText ("Turn a minilogue xd knob to see what it controls", juce::dontSendNotification);
     lastControl.setJustificationType (juce::Justification::centred);
-    lastControl.setColour (juce::Label::textColourId, colours::dimText);
     lastControl.setFont (juce::FontOptions (14.0f));
     lastControl.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (lastControl);
+
+    // The editor keeps the keyboard focus so the laptop keys always play: nothing else takes
+    // it on a click, except text fields while you type in them.
+    setWantsKeyboardFocus (true);
+
+    laptopKeys.setBaseNote (settings.getIntValue ("laptopKeysBaseNote", 60));
+    laptopKeys.onOctaveChange = [this]
+    {
+        settings.setValue ("laptopKeysBaseNote", laptopKeys.getBaseNote());
+        settings.saveIfNeeded();
+        repaint();
+    };
+
+    int savedTheme = 0;
+    for (int i = 0; i < (int) themes().size(); ++i)
+        if (settings.getValue ("theme") == themes()[(size_t) i].name)
+            savedTheme = i;
 
     setResizable (true, false);  // the host or standalone window frame does the resizing
     setResizeLimits (designWidth * 3 / 4, designHeight * 3 / 4, designWidth * 2, designHeight * 2);
     getConstrainer()->setFixedAspectRatio ((double) designWidth / designHeight);
     setSize (designWidth, designHeight);
+    setTheme (savedTheme);
     startTimerHz (10);
 }
 
 QuantumSynthEditor::~QuantumSynthEditor()
 {
+    laptopKeys.releaseAll();
     setLookAndFeel (nullptr);
+}
+
+//==============================================================================
+void QuantumSynthEditor::showThemeMenu()
+{
+    juce::PopupMenu menu;
+    for (int i = 0; i < (int) themes().size(); ++i)
+    {
+        const auto& theme = themes()[(size_t) i];
+        menu.addItem (i + 1, juce::String (theme.name) + (theme.minilogueLayout ? "  (xd panel layout)" : ""), true, i == themeIndex);
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (themeButton), [this] (int result)
+                        {
+                            if (result > 0)
+                            {
+                                setTheme (result - 1);
+                                settings.setValue ("theme", themes()[(size_t) themeIndex].name);
+                                settings.saveIfNeeded();
+                            }
+                        });
+}
+
+void QuantumSynthEditor::setTheme (int index)
+{
+    themeIndex = juce::jlimit (0, (int) themes().size() - 1, index);
+    const auto& theme = themes()[(size_t) themeIndex];
+    applyTheme (theme);
+    minilogueLayout = theme.minilogueLayout;
+
+    for (auto& c : controls)
+    {
+        c->label.setText (minilogueLayout ? c->xdName : c->name, juce::dontSendNotification);
+        c->hint.setVisible (minilogueLayout && c->xdHint.isNotEmpty());
+    }
+
+    applyThemeColours();
+    resized();
+    repaint();
+}
+
+void QuantumSynthEditor::applyThemeColours()
+{
+    lookAndFeel.refreshColours();
+
+    for (const auto* list : { &sections, &xdSections })
+        if (list == (minilogueLayout ? &xdSections : &sections))
+            for (const auto& section : *list)
+                for (auto* c : section.controls)
+                    if (c != nullptr)
+                        c->slider.setColour (juce::Slider::rotarySliderFillColourId, *section.accent);
+    // EG / LFO share one panel on the xd layout, but keep their own colours per row.
+    if (minilogueLayout)
+    {
+        for (size_t i = 4; i < 9; ++i)
+            if (auto* c = xdSections[4].controls[i])
+                c->slider.setColour (juce::Slider::rotarySliderFillColourId, colours::filterEnvelope);
+        for (size_t i = 9; i < 13; ++i)
+            if (auto* c = xdSections[4].controls[i])
+                c->slider.setColour (juce::Slider::rotarySliderFillColourId, colours::lfo);
+    }
+    for (auto& c : controls)
+        c->hint.setColour (juce::Label::textColourId, colours::dimText);
+
+    keyboard.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, colours::whiteKey);
+    keyboard.setColour (juce::MidiKeyboardComponent::blackNoteColourId, colours::blackKey);
+    keyboard.setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, colours::keyEdge);
+    keyboard.setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, colours::wave.withAlpha (0.3f));
+    keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, colours::wave.withAlpha (0.8f));
+    keyboard.setColour (juce::MidiKeyboardComponent::shadowColourId, juce::Colours::transparentBlack);
+    keyboard.setColour (juce::MidiKeyboardComponent::textLabelColourId, colours::blackKey);
+
+    lastControl.setColour (juce::Label::textColourId, shownControl >= 0 ? colours::text : colours::dimText);
+    sendLookAndFeelChange();
+
+    // A look-and-feel change rebuilds the drop-downs' and knobs' text boxes, so this runs after it.
+    std::function<void (juce::Component&)> dontTakeFocus = [&] (juce::Component& c)
+    {
+        for (auto* child : c.getChildren())
+        {
+            if (dynamic_cast<juce::TextEditor*> (child) == nullptr)
+            {
+                child->setWantsKeyboardFocus (false);
+                child->setMouseClickGrabsKeyboardFocus (false);
+            }
+            dontTakeFocus (*child);
+        }
+    };
+    dontTakeFocus (*this);
+}
+
+//==============================================================================
+bool QuantumSynthEditor::keyPressed (const juce::KeyPress& key)
+{
+    return laptopKeys.keyPressed (key);
+}
+
+bool QuantumSynthEditor::keyStateChanged (bool)
+{
+    return laptopKeys.keyStateChanged();
+}
+
+void QuantumSynthEditor::focusLost (FocusChangeType)
+{
+    laptopKeys.releaseAll();  // the key-up would never arrive
+}
+
+void QuantumSynthEditor::visibilityChanged()
+{
+    keepKeyboardFocus();
+}
+
+void QuantumSynthEditor::keepKeyboardFocus()
+{
+    // Take the focus back whenever our window is active, unless a text field of ours is being
+    // typed in (a preset name, or a value typed into a knob's box).
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused == this || (focused != nullptr && isParentOf (focused) && dynamic_cast<juce::TextEditor*> (focused) != nullptr))
+        return;
+
+    auto* peer = getPeer();
+    if (isShowing() && peer != nullptr && peer->isFocused())
+        grabKeyboardFocus();
+}
+
+//==============================================================================
+namespace
+{
+// Two rows of a QWERTY keyboard as a piano: white keys on A S D F ..., black keys above them.
+const char laptopKeyChars[LaptopKeys::numKeys + 1] = "awsedftgyhujkolp;'";
+} // namespace
+
+void LaptopKeys::setBaseNote (int note)
+{
+    releaseAll();
+    baseNote = juce::jlimit (0, 120 - numKeys, note - note % 12);
+}
+
+bool LaptopKeys::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getModifiers().isAnyModifierKeyDown())
+        return false;
+
+    const auto typed = key.getTextCharacter();
+    const auto c = juce::CharacterFunctions::toLowerCase (typed != 0 ? typed : (juce::juce_wchar) key.getKeyCode());
+    if (c == 'z' || c == 'x')
+    {
+        const int before = baseNote;
+        setBaseNote (baseNote + (c == 'z' ? -12 : 12));
+        if (baseNote != before && onOctaveChange)
+            onOctaveChange();
+        return true;
+    }
+    return juce::String (laptopKeyChars).containsChar (c);
+}
+
+bool LaptopKeys::keyStateChanged()
+{
+    if (! initialised)
+    {
+        playing.fill (-1);
+        initialised = true;
+    }
+
+    bool used = false;
+    for (int i = 0; i < numKeys; ++i)
+    {
+        const bool down = juce::KeyPress::isKeyCurrentlyDown (laptopKeyChars[i]);
+        auto& note = playing[(size_t) i];
+        if (down && note < 0)
+        {
+            note = baseNote + i;
+            keyboardState.noteOn (1, note, 0.8f);
+            used = true;
+        }
+        else if (! down && note >= 0)
+        {
+            keyboardState.noteOff (1, note, 0.0f);
+            note = -1;
+            used = true;
+        }
+    }
+    return used;
+}
+
+void LaptopKeys::releaseAll()
+{
+    if (! initialised)
+        return;
+    for (auto& note : playing)
+        if (note >= 0)
+        {
+            keyboardState.noteOff (1, note, 0.0f);
+            note = -1;
+        }
 }
 
 void QuantumSynthEditor::timerCallback()
@@ -662,6 +938,8 @@ void QuantumSynthEditor::timerCallback()
         midiCheckCounter = 0;
         enableMinilogueMidiInput();
     }
+
+    keepKeyboardFocus();
 }
 
 void QuantumSynthEditor::enableMinilogueMidiInput()
@@ -719,20 +997,72 @@ void QuantumSynthEditor::paint (juce::Graphics& g)
     g.setColour (xdSeen ? colours::midi : colours::panelEdge);
     g.drawRoundedRectangle (statusPill.toFloat().reduced (0.5f), (float) statusPill.getHeight() * 0.5f, 1.0f);
 
-    for (const auto& section : sections)
-    {
-        const auto bounds = section.bounds.toFloat();
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (bounds, 8.0f);
-        g.setColour (colours::panelEdge);
-        g.drawRoundedRectangle (bounds.reduced (0.5f), 8.0f, 1.0f);
+    for (const auto& section : minilogueLayout ? xdSections : sections)
+        paintSection (g, section);
 
-        // Accent strip and title.
-        g.setColour (section.accent);
-        g.fillRoundedRectangle (bounds.getX() + 14.0f, bounds.getY() + 14.0f, 4.0f, 16.0f, 2.0f);
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        g.drawText (section.title, section.bounds.reduced (26, 0).withTrimmedTop (11).withHeight (22), juce::Justification::centredLeft);
+    paintLaptopKeys (g);
+}
+
+void QuantumSynthEditor::paintSection (juce::Graphics& g, const Section& section) const
+{
+    const auto bounds = section.bounds.toFloat();
+    g.setColour (colours::panel);
+    g.fillRoundedRectangle (bounds, 8.0f);
+    g.setColour (colours::panelEdge);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), 8.0f, 1.0f);
+
+    // Accent strip and title.
+    g.setColour (*section.accent);
+    g.fillRoundedRectangle (bounds.getX() + 14.0f, bounds.getY() + 14.0f, 4.0f, 16.0f, 2.0f);
+    g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+    g.drawText (section.title, section.bounds.reduced (26, 0).withTrimmedTop (11).withHeight (22), juce::Justification::centredLeft);
+
+    if (section.note.isNotEmpty())
+    {
+        g.setColour (colours::dimText);
+        g.setFont (juce::FontOptions (12.5f));
+        g.drawText (section.note, section.bounds.reduced (14, 0).withTrimmedTop (11).withHeight (22), juce::Justification::centredRight);
     }
+
+    // Row names down the left edge, with a rule between rows, like the xd's panel print.
+    if (! section.rowTitles.isEmpty())
+    {
+        const auto rows = section.bounds.reduced (14, 10).withTrimmedTop (30);
+        const int rowHeight = rows.getHeight() / section.rowTitles.size();
+        for (int r = 0; r < section.rowTitles.size(); ++r)
+        {
+            const auto row = rows.withY (rows.getY() + r * rowHeight).withHeight (rowHeight);
+            if (r > 0)
+            {
+                g.setColour (colours::panelEdge);
+                g.drawHorizontalLine (row.getY(), (float) row.getX(), (float) row.getRight());
+            }
+            g.setColour (colours::label);
+            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            g.drawText (section.rowTitles[r], row.withWidth (rowTitleWidth), juce::Justification::centredLeft);
+        }
+    }
+}
+
+void QuantumSynthEditor::paintLaptopKeys (juce::Graphics& g) const
+{
+    // Which keys the computer keyboard plays: a bar over them, and how to move it.
+    const int base = laptopKeys.getBaseNote();
+    const float x1 = (float) keyboard.getX() + keyboard.getKeyStartPosition (juce::jmax (keyboard.getRangeStart(), base));
+    const int last = juce::jmin (keyboard.getRangeEnd(), base + LaptopKeys::numKeys - 1);
+    const float x2 = (float) keyboard.getX() + keyboard.getKeyStartPosition (last) + keyboard.getKeyWidth();
+    const float y = (float) keyboard.getY() - 5.0f;
+    if (x2 > x1)
+    {
+        g.setColour (colours::wave);
+        g.fillRoundedRectangle (x1, y, x2 - x1, 3.0f, 1.5f);
+    }
+
+    const auto octaveName = juce::MidiMessage::getMidiNoteName (base, true, true, 3);
+    g.setColour (colours::dimText);
+    g.setFont (juce::FontOptions (12.0f));
+    g.drawText ("Laptop keys from " + octaveName + "   Z / X: octave down / up",
+                juce::Rectangle<float> (x2 + 10.0f, y - 9.0f, 320.0f, 14.0f), juce::Justification::centredLeft);
 }
 
 void QuantumSynthEditor::layOutRow (juce::Rectangle<int> row, std::initializer_list<size_t> sectionIndices)
@@ -766,16 +1096,33 @@ void QuantumSynthEditor::resized()
     auto area = juce::Rectangle<int> (designWidth, designHeight).reduced (14);
 
     header = area.removeFromTop (40);
-    statusPill = header.withLeft (header.getRight() - 380).withSizeKeepingCentre (380, 32);
+    themeButton.setBounds (header.removeFromRight (72).withSizeKeepingCentre (72, 32));
+    header.removeFromRight (8);
+    statusPill = header.withLeft (header.getRight() - 360).withSizeKeepingCentre (360, 32);
     lastControl.setBounds (statusPill.reduced (14, 0));
     presetBar.setBounds (juce::Rectangle<int>::leftTopRightBottom (header.getX() + titleWidth + subtitleWidth, statusPill.getY(),
                                                                     statusPill.getX() - 16, statusPill.getBottom()));
     area.removeFromTop (8);
 
-    keyboard.setBounds (area.removeFromBottom (76));
+    keyboard.setBounds (area.removeFromBottom (72));
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 43.0f);  // 43 white keys from C1 to C7
-    area.removeFromBottom (12);
+    area.removeFromBottom (18);  // room for the laptop keys marker
 
+    for (auto& c : controls)
+        c->setVisible (false);
+    for (const auto& section : minilogueLayout ? xdSections : sections)
+        for (auto* c : section.controls)
+            if (c != nullptr)
+                c->setVisible (true);
+
+    if (minilogueLayout)
+        layOutMinilogue (area);
+    else
+        layOutStandard (area);
+}
+
+void QuantumSynthEditor::layOutStandard (juce::Rectangle<int> area)
+{
     // Display, with the MIDI and output section beside it.
     auto top = area.removeFromTop (208);
     auto& midi = sections[5];
@@ -797,4 +1144,80 @@ void QuantumSynthEditor::resized()
     layOutRow (area.removeFromTop (rowHeight), { 0, 1 });
     area.removeFromTop (12);
     layOutRow (area.removeFromTop (rowHeight), { 2, 3, 4 });
+}
+
+void QuantumSynthEditor::layOutMinilogue (juce::Rectangle<int> area)
+{
+    // The display sits on top like the xd's screen; below it the panel sections run left to
+    // right as on the xd: MASTER, the oscillators, MIXER, FILTER, then the envelopes and LFO.
+    display.setBounds (area.removeFromTop (150));
+    area.removeFromTop (12);
+
+    constexpr int gap = 10;
+    auto& master = xdSections[0];
+    auto& oscillators = xdSections[1];
+    auto& mixer = xdSections[2];
+    auto& filter = xdSections[3];
+    auto& envelopes = xdSections[4];
+
+    master.bounds = area.removeFromLeft (112);
+    area.removeFromLeft (gap);
+    oscillators.bounds = area.removeFromLeft (rowTitleWidth + 3 * 84 + 28);
+    area.removeFromLeft (gap);
+    mixer.bounds = area.removeFromLeft (104);
+    area.removeFromLeft (gap);
+    filter.bounds = area.removeFromLeft (168);
+    area.removeFromLeft (gap);
+    envelopes.bounds = area;
+
+    // A column of controls, one per row.
+    auto column = [] (const Section& section, std::initializer_list<int> rowSpans)
+    {
+        auto inner = section.bounds.reduced (14, 10).withTrimmedTop (30);
+        const int rowHeight = inner.getHeight() / 3;
+        size_t i = 0;
+        for (int span : rowSpans)
+        {
+            auto cell = inner.removeFromTop (rowHeight * span);
+            if (i < section.controls.size() && section.controls[i] != nullptr)
+                section.controls[i]->setBounds (cell);
+            ++i;
+        }
+    };
+
+    // Rows of equal slots beside the row names, the given number per row, filled in order;
+    // a nullptr control leaves its slot empty.
+    auto grid = [] (const Section& section, std::initializer_list<int> slotsPerRow)
+    {
+        auto inner = section.bounds.reduced (14, 10).withTrimmedTop (30);
+        inner.removeFromLeft (rowTitleWidth);
+        const int rowHeight = inner.getHeight() / (int) slotsPerRow.size();
+        size_t index = 0;
+        int r = 0;
+        for (int slots : slotsPerRow)
+        {
+            const int slotWidth = inner.getWidth() / slots;
+            for (int col = 0; col < slots && index < section.controls.size(); ++col, ++index)
+                if (auto* c = section.controls[index])
+                    c->setBounds (inner.getX() + col * slotWidth, inner.getY() + r * rowHeight + 4, slotWidth, rowHeight - 4);
+            ++r;
+        }
+    };
+
+    column (master, { 1, 1, 1 });
+    grid (oscillators, { 3, 3, 3 });
+    // VCO 1 OCTAVE picks the filter mode; its drop-down takes the two free slots of that row.
+    if (auto* mode = oscillators.controls[1])
+        mode->setBounds (mode->getBounds().withWidth (mode->getWidth() * 2));
+    column (mixer, { 2 });
+    {
+        // CUTOFF large on the left, RESONANCE and KEY TRACK stacked beside it.
+        auto inner = filter.bounds.reduced (14, 10).withTrimmedTop (30);
+        const int rowHeight = inner.getHeight() / 3;
+        auto right = inner.removeFromRight (inner.getWidth() / 2);
+        filter.controls[0]->setBounds (inner.removeFromTop (rowHeight * 2));
+        filter.controls[1]->setBounds (right.removeFromTop (rowHeight));
+        filter.controls[2]->setBounds (right.removeFromTop (rowHeight));
+    }
+    grid (envelopes, { 4, 5, 4 });
 }

@@ -48,6 +48,32 @@ The layout is paraphonic: 8 voices with two oscillators (saw, square, triangle, 
 amp envelope each, all summed into one shared quantum filter. The filter envelope retriggers
 on every new note. An LFO can move the barrier, the oscillator mix or the pitch.
 
+## Playing from the computer keyboard
+
+In the standalone app (and in a host that passes keys to plug-ins) the laptop keys play
+notes whatever you clicked last: A S D F G H J K L ; ' are the white keys from C, W E T Y U
+O P the black ones. **Z** and **X** move the octave down and up; it starts at C3 (middle C)
+and is remembered. A bar over the on-screen keyboard shows which keys the laptop plays.
+
+## Themes
+
+**Theme** in the top right picks the look; the choice is remembered for every instance.
+
+| Theme | Look |
+| --- | --- |
+| Quantum Night | the default dark blue |
+| minilogue xd | black and silver, with the controls laid out like the minilogue xd's front panel |
+| Paper Lab | light, like a printed physics diagram |
+| Phosphor | green oscilloscope screen with an amber barrier |
+| Synthwave | purple, pink and cyan |
+| Graphite | warm greys with orange |
+
+The minilogue xd layout puts each control where the xd knob or switch that moves it sits:
+MASTER, then VCO 1 / VCO 2 / MULTI ENGINE rows, MIXER, FILTER, and AMP EG / EG / LFO rows,
+labelled with the xd's panel names and what they do here underneath (VCO 1 OCTAVE, for
+example, is the filter mode). Filter envelope sustain and release have no xd knob and sit at
+the end of the EG row. Settings live in `~/.config/Quantum Synth/` on Linux.
+
 ## Presets
 
 The bar at the top of the window browses the preset library. ◀ ▶ step through every preset;
