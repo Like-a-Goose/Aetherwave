@@ -2,36 +2,103 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
+
+// The colours the editor paints with. They belong to the current theme: applyTheme() changes
+// them for every open editor, so read them at paint time rather than keeping copies.
 namespace colours
 {
-const juce::Colour background { 0xff0e1016 };
-const juce::Colour panel { 0xff181c26 };
-const juce::Colour panelEdge { 0xff262c3b };
-const juce::Colour control { 0xff222736 };     // knob bodies and drop-downs
-const juce::Colour controlEdge { 0xff3a4257 };
-const juce::Colour track { 0xff303749 };       // unlit part of a knob's arc
-const juce::Colour grid { 0xff2a3040 };
-const juce::Colour text { 0xffeef1f7 };
-const juce::Colour label { 0xffc3c9d6 };
-const juce::Colour dimText { 0xff8f98ad };
-
-const juce::Colour wave { 0xff5ad1e6 };
-const juce::Colour barrier { 0xffc77dff };
+inline juce::Colour background, panel, panelEdge;
+inline juce::Colour control, controlEdge;  // knob bodies and drop-downs
+inline juce::Colour track;                 // unlit part of a knob's arc
+inline juce::Colour grid, text, label, dimText;
+inline juce::Colour wave, barrier;
 
 // One accent per section, so related controls read as a group.
-const juce::Colour oscillators { 0xff5ad1e6 };
-const juce::Colour filter { 0xffc77dff };
-const juce::Colour ampEnvelope { 0xff6ee7a0 };
-const juce::Colour filterEnvelope { 0xffe58cf0 };
-const juce::Colour lfo { 0xffffc861 };
-const juce::Colour midi { 0xff7aa7ff };
+inline juce::Colour oscillators, filter, ampEnvelope, filterEnvelope, lfo, midi;
+
+inline juce::Colour whiteKey, blackKey, keyEdge;
 } // namespace colours
 
-// Flat dark theme with large, high-contrast knobs, values and drop-downs.
+struct Theme
+{
+    const char* name;
+    bool minilogueLayout;  // controls placed where their minilogue xd knob sits
+    juce::uint32 background, panel, panelEdge, control, controlEdge, track, grid, text, label, dimText;
+    juce::uint32 wave, barrier, oscillators, filter, ampEnvelope, filterEnvelope, lfo, midi;
+    juce::uint32 whiteKey, blackKey, keyEdge;
+};
+
+inline const std::array<Theme, 6>& themes()
+{
+    static const std::array<Theme, 6> list { {
+        { "Quantum Night", false,
+          0xff0e1016, 0xff181c26, 0xff262c3b, 0xff222736, 0xff3a4257, 0xff303749, 0xff2a3040, 0xffeef1f7, 0xffc3c9d6, 0xff8f98ad,
+          0xff5ad1e6, 0xffc77dff, 0xff5ad1e6, 0xffc77dff, 0xff6ee7a0, 0xffe58cf0, 0xffffc861, 0xff7aa7ff,
+          0xffe4e7ee, 0xff1b1f2a, 0xff9aa1b2 },
+        { "minilogue xd", true,  // black panel, white legends, one red LED colour
+          0xff0b0b0c, 0xff151517, 0xff2c2c30, 0xff202023, 0xff4a4a50, 0xff2e2e33, 0xff26262a, 0xfff4f4f4, 0xffdcdcdc, 0xff8e8e94,
+          0xffff4b3e, 0xfff4f4f4, 0xffd9d9de, 0xffd9d9de, 0xffd9d9de, 0xffd9d9de, 0xffd9d9de, 0xffd9d9de,
+          0xfff2f2f0, 0xff141414, 0xff8e8e94 },
+        { "Paper Lab", false,  // light, like a printed physics diagram
+          0xfff2efe8, 0xfffbfaf6, 0xffd9d4c7, 0xffece8de, 0xffb9b2a2, 0xffddd8cc, 0xffe6e1d6, 0xff1d1f24, 0xff3d424d, 0xff767b86,
+          0xff0a7f95, 0xff8b3fd1, 0xff0a7f95, 0xff8b3fd1, 0xff1f8a52, 0xffb23fb8, 0xffc27c00, 0xff2f5fd0,
+          0xfffffdf8, 0xff2a2c31, 0xffb9b2a2 },
+        { "Phosphor", false,  // green oscilloscope screen with an amber barrier
+          0xff050a07, 0xff0b140e, 0xff18301f, 0xff102016, 0xff2a5236, 0xff1a3322, 0xff143020, 0xffd8ffe2, 0xff9fdcae, 0xff5f8f6c,
+          0xff39ff88, 0xffffb000, 0xff39ff88, 0xffffb000, 0xff7dffb0, 0xffffd166, 0xffb6ff3b, 0xff4fe3c1,
+          0xffcfe9d6, 0xff0b140e, 0xff5f8f6c },
+        { "Synthwave", false,
+          0xff140a24, 0xff1f1036, 0xff3a1f5c, 0xff2a1748, 0xff563585, 0xff3b2160, 0xff2e1a4d, 0xfffdf0ff, 0xffe0c6f5, 0xffa387c0,
+          0xff2de2e6, 0xffff3cac, 0xff2de2e6, 0xffff3cac, 0xff7cf29c, 0xffff6c11, 0xffffd319, 0xff8f7dff,
+          0xfff4e9ff, 0xff1f1036, 0xffa387c0 },
+        { "Graphite", false,  // warm greys with orange
+          0xff161616, 0xff202020, 0xff333333, 0xff2b2b2b, 0xff4a4a4a, 0xff3a3a3a, 0xff2e2e2e, 0xfff2f2f2, 0xffc8c8c8, 0xff8c8c8c,
+          0xffff8a3d, 0xff9ec1ff, 0xffff9f43, 0xffff6b4a, 0xffe6e6e6, 0xffffc145, 0xff9ec1ff, 0xffb8b8b8,
+          0xffececec, 0xff111111, 0xff8c8c8c },
+    } };
+    return list;
+}
+
+inline void applyTheme (const Theme& t)
+{
+    using juce::Colour;
+    colours::background = Colour (t.background);
+    colours::panel = Colour (t.panel);
+    colours::panelEdge = Colour (t.panelEdge);
+    colours::control = Colour (t.control);
+    colours::controlEdge = Colour (t.controlEdge);
+    colours::track = Colour (t.track);
+    colours::grid = Colour (t.grid);
+    colours::text = Colour (t.text);
+    colours::label = Colour (t.label);
+    colours::dimText = Colour (t.dimText);
+    colours::wave = Colour (t.wave);
+    colours::barrier = Colour (t.barrier);
+    colours::oscillators = Colour (t.oscillators);
+    colours::filter = Colour (t.filter);
+    colours::ampEnvelope = Colour (t.ampEnvelope);
+    colours::filterEnvelope = Colour (t.filterEnvelope);
+    colours::lfo = Colour (t.lfo);
+    colours::midi = Colour (t.midi);
+    colours::whiteKey = Colour (t.whiteKey);
+    colours::blackKey = Colour (t.blackKey);
+    colours::keyEdge = Colour (t.keyEdge);
+}
+
+// Flat theme with large, high-contrast knobs, values and drop-downs.
 class QuantumLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     QuantumLookAndFeel()
+    {
+        if (colours::background.isTransparent())
+            applyTheme (themes()[0]);
+        refreshColours();
+    }
+
+    // Picks up the current theme's colours; call after applyTheme.
+    void refreshColours()
     {
         setColour (juce::ResizableWindow::backgroundColourId, colours::background);
         setColour (juce::Label::textColourId, colours::label);
