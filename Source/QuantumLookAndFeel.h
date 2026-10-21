@@ -57,7 +57,25 @@ public:
         setColour (juce::TextEditor::outlineColourId, colours::controlEdge);
         setColour (juce::TextEditor::focusedOutlineColourId, colours::wave);
         setColour (juce::CaretComponent::caretColourId, colours::text);
+
+        setColour (juce::TextButton::buttonColourId, colours::control);
+        setColour (juce::TextButton::buttonOnColourId, colours::controlEdge);
+        setColour (juce::TextButton::textColourOffId, colours::text);
+        setColour (juce::TextButton::textColourOnId, colours::text);
+        setColour (juce::PopupMenu::headerTextColourId, colours::dimText);
     }
+
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& background,
+                               bool highlighted, bool down) override
+    {
+        const auto bounds = button.getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (background.brighter (down ? 0.2f : (highlighted ? 0.1f : 0.0f)));
+        g.fillRoundedRectangle (bounds, 5.0f);
+        g.setColour (colours::controlEdge);
+        g.drawRoundedRectangle (bounds, 5.0f, 1.2f);
+    }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return juce::FontOptions (15.0f); }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float position,
                            float startAngle, float endAngle, juce::Slider& slider) override

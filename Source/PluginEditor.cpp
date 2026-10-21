@@ -396,6 +396,151 @@ void QuantumSynthEditor::addSection (const juce::String& title, juce::Colour acc
     sections.push_back ({ title, accent, std::move (sectionControls), {} });
 }
 
+//==============================================================================
+PresetBar::PresetBar (PresetManager& manager) : presets (manager)
+{
+    // Arrows drawn as text so they scale with the rest of the editor.
+    previous.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x97\x80")));
+    next.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb6")));
+    previous.setTooltip ("Previous preset");
+    next.setTooltip ("Next preset");
+    browse.setTooltip ("Browse presets");
+    save.setTooltip ("Save the current sound as a preset");
+
+    previous.onClick = [this] { step (-1); };
+    next.onClick = [this] { step (1); };
+    browse.onClick = [this] { showMenu(); };
+    save.onClick = [this] { nameEditor.isVisible() ? finishSave (true) : beginSave(); };
+
+    nameEditor.setFont (juce::FontOptions (15.0f));
+    nameEditor.setTextToShowWhenEmpty ("Preset name", colours::dimText);
+    nameEditor.setIndents (8, 6);
+    nameEditor.onReturnKey = [this] { finishSave (true); };
+    nameEditor.onEscapeKey = [this] { finishSave (false); };
+    nameEditor.onFocusLost = [this] { finishSave (false); };
+
+    for (auto* b : { &previous, &next, &browse, &save })
+        addAndMakeVisible (*b);
+    addChildComponent (nameEditor);
+
+    refresh();
+    startTimerHz (5);
+}
+
+void PresetBar::resized()
+{
+    auto area = getLocalBounds();
+    save.setBounds (area.removeFromRight (64));
+    area.removeFromRight (8);
+    previous.setBounds (area.removeFromLeft (32));
+    next.setBounds (area.removeFromRight (32));
+    area.reduce (6, 0);
+    browse.setBounds (area);
+    nameEditor.setBounds (area);
+}
+
+void PresetBar::timerCallback()
+{
+    refresh();
+}
+
+void PresetBar::refresh()
+{
+    // The name of what is loaded, marked once it has been changed and not saved.
+    auto text = presets.getCurrentName();
+    if (presets.isModified())
+        text += "  (edited)";
+    if (text != shownText)
+    {
+        shownText = text;
+        browse.setButtonText (text);
+    }
+}
+
+void PresetBar::step (int delta)
+{
+    const auto entries = presets.getEntries();
+    if (entries.isEmpty())
+        return;
+    const int current = presets.indexOfCurrent (entries);
+    const int target = current < 0 ? 0 : (current + delta + entries.size()) % entries.size();
+    presets.load (entries[target]);
+    refresh();
+}
+
+void PresetBar::showMenu()
+{
+    enum { saveId = 100000, deleteId, folderId };
+
+    const auto entries = presets.getEntries();
+    const int current = presets.indexOfCurrent (entries);
+
+    juce::PopupMenu menu;
+    juce::String category;
+    for (int i = 0; i < entries.size(); ++i)
+    {
+        if (entries[i].category != category)
+        {
+            category = entries[i].category;
+            menu.addSectionHeader (category == "User" ? "Your presets" : category);
+        }
+        menu.addItem (i + 1, entries[i].name, true, i == current);
+    }
+    if (category != "User")
+    {
+        menu.addSectionHeader ("Your presets");
+        menu.addItem (-1, "Saved presets show up here", false, false);
+    }
+
+    const bool userPresetLoaded = current >= 0 && ! entries[current].isFactory();
+    menu.addSeparator();
+    menu.addItem (saveId, "Save as new preset...");
+    menu.addItem (deleteId, "Delete \"" + presets.getCurrentName() + "\"", userPresetLoaded);
+    menu.addItem (folderId, "Show presets folder");
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (browse),
+                        [this, entries, current] (int result)
+                        {
+                            if (result == saveId)
+                                beginSave();
+                            else if (result == deleteId)
+                                presets.deleteUserPreset (entries[current]);
+                            else if (result == folderId)
+                            {
+                                const auto folder = PresetManager::getUserFolder();
+                                folder.createDirectory();
+                                folder.startAsProcess();
+                            }
+                            else if (result > 0 && result <= entries.size())
+                                presets.load (entries[result - 1]);
+                            refresh();
+                        });
+}
+
+void PresetBar::beginSave()
+{
+    const bool userPreset = presets.getCurrentFactoryIndex() < 0;
+    nameEditor.setText (userPreset ? presets.getCurrentName() : juce::String(), false);
+    nameEditor.selectAll();
+    nameEditor.setVisible (true);
+    browse.setVisible (false);
+    nameEditor.grabKeyboardFocus();
+}
+
+void PresetBar::finishSave (bool commit)
+{
+    if (! nameEditor.isVisible())
+        return;
+
+    const auto name = nameEditor.getText().trim();
+    nameEditor.setVisible (false);
+    browse.setVisible (true);
+    if (commit && name.isNotEmpty())
+        presets.saveUserPreset (name);
+    refresh();
+}
+
+//==============================================================================
 QuantumSynthEditor::Control* QuantumSynthEditor::addKnob (const juce::String& paramId, const juce::String& name)
 {
     auto c = std::make_unique<Control>();
@@ -435,12 +580,13 @@ QuantumSynthEditor::Control* QuantumSynthEditor::addChoice (const juce::String& 
 }
 
 QuantumSynthEditor::QuantumSynthEditor (QuantumSynthProcessor& p)
-    : AudioProcessorEditor (&p), synth (p), display (p),
+    : AudioProcessorEditor (&p), synth (p), display (p), presetBar (p.presets),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     setLookAndFeel (&lookAndFeel);
 
     addAndMakeVisible (display);
+    addAndMakeVisible (presetBar);
     addAndMakeVisible (keyboard);
     keyboard.setAvailableRange (24, 96);
     keyboard.setLowestVisibleKey (24);
@@ -562,10 +708,10 @@ void QuantumSynthEditor::paint (juce::Graphics& g)
     auto title = header;
     g.setColour (colours::text);
     g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
-    g.drawText ("QUANTUM SYNTH", title.removeFromLeft (220), juce::Justification::centredLeft);
+    g.drawText ("QUANTUM SYNTH", title.removeFromLeft (titleWidth), juce::Justification::centredLeft);
     g.setColour (colours::dimText);
     g.setFont (juce::FontOptions (15.0f));
-    g.drawText ("tunnelling filter synth", title.removeFromLeft (220), juce::Justification::centredLeft);
+    g.drawText ("tunnelling filter synth", title.removeFromLeft (subtitleWidth), juce::Justification::centredLeft);
 
     const bool xdSeen = shownControl >= 0;
     g.setColour (xdSeen ? colours::midi.withAlpha (0.18f) : colours::panel);
@@ -620,8 +766,10 @@ void QuantumSynthEditor::resized()
     auto area = juce::Rectangle<int> (designWidth, designHeight).reduced (14);
 
     header = area.removeFromTop (40);
-    statusPill = header.withLeft (header.getRight() - 440).withSizeKeepingCentre (440, 32);
+    statusPill = header.withLeft (header.getRight() - 380).withSizeKeepingCentre (380, 32);
     lastControl.setBounds (statusPill.reduced (14, 0));
+    presetBar.setBounds (juce::Rectangle<int>::leftTopRightBottom (header.getX() + titleWidth + subtitleWidth, statusPill.getY(),
+                                                                    statusPill.getX() - 16, statusPill.getBottom()));
     area.removeFromTop (8);
 
     keyboard.setBounds (area.removeFromBottom (76));

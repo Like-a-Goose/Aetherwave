@@ -1,13 +1,17 @@
 // Checks the quantum DSP core without JUCE, and renders a short demo WAV.
 // Usage: qs_dsp_tests [demo.wav]
 
+#include "../Source/dsp/FactoryPresets.h"
 #include "../Source/dsp/MinilogueXd.h"
+#include "../Source/dsp/SettingsFromParameters.h"
 #include "../Source/dsp/SynthEngine.h"
 
 #include <chrono>
 #include <complex>
+#include <cstring>
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -284,6 +288,116 @@ static void testModeLoudness()
         std::printf ("      note %d: modes span %.1f dB (%.1f .. %.1f dBFS)\n", note, loudest - quietest, quietest, loudest);
         check (loudest - quietest < 6.0, "all filter modes within 6 dB of each other at default settings", loudest - quietest);
     }
+}
+
+// Plain ranges and defaults of the plug-in's parameters (PluginProcessor.cpp createLayout),
+// so the factory presets can be checked without JUCE.
+struct ParameterSpec
+{
+    const char* id;
+    float min, max, defaultValue;
+    bool integer;
+};
+
+static const ParameterSpec parameterSpecs[] = {
+    { "osc1Wave", 0, 3, 0, true }, { "osc2Wave", 0, 3, 1, true }, { "osc2Semi", -24, 24, 0, true },
+    { "osc2Fine", -50, 50, 7, false }, { "oscMix", 0, 1, 0.5f, false }, { "filterMode", 0, numFilterModes - 1, 1, true },
+    { "barrier", 20, 18000, 600, false }, { "width", 0.3f, 8, 3, false }, { "gap", 0.5f, 20, 6, false },
+    { "envAmount", -6, 6, 3, false }, { "keyTrack", 0, 1, 0.5f, false },
+    { "ampA", 0.001f, 5, 0.005f, false }, { "ampD", 0.001f, 5, 0.3f, false }, { "ampS", 0, 1, 0.8f, false },
+    { "ampR", 0.001f, 5, 0.4f, false }, { "filtA", 0.001f, 5, 0.01f, false }, { "filtD", 0.001f, 5, 0.5f, false },
+    { "filtS", 0, 1, 0.2f, false }, { "filtR", 0.001f, 5, 0.5f, false },
+    { "lfoWave", 0, 2, 1, true }, { "lfoTarget", 0, 2, 0, true }, { "lfoRate", 0.05f, 20, 4, false },
+    { "lfoAmount", 0, 1, 0, false }, { "bendRange", 0, 12, 2, true }, { "gain", -36, 6, -6, false },
+};
+
+static const ParameterSpec* findSpec (const char* id)
+{
+    for (const auto& spec : parameterSpecs)
+        if (std::strcmp (spec.id, id) == 0)
+            return &spec;
+    return nullptr;
+}
+
+static SynthSettings presetSettings (const FactoryPreset& preset)
+{
+    return settingsFromParameters ([&] (const char* id)
+    {
+        for (const auto& v : preset.values)
+            if (std::strcmp (v.id, id) == 0)
+                return v.value;
+        return findSpec (id)->defaultValue;
+    });
+}
+
+static void testFactoryPresets()
+{
+    const auto& presets = factoryPresets();
+
+    // Every value names a real parameter and sits inside its range.
+    bool valid = true;
+    std::set<std::string> names;
+    for (const auto& preset : presets)
+    {
+        valid &= names.insert (preset.name).second;
+        for (const auto& v : preset.values)
+        {
+            const auto* spec = findSpec (v.id);
+            const bool ok = spec != nullptr && v.value >= spec->min && v.value <= spec->max
+                            && (! spec->integer || v.value == std::round (v.value));
+            if (! ok)
+                std::printf ("      %s: bad value for %s\n", preset.name, v.id);
+            valid &= ok;
+        }
+    }
+    check (valid, "factory presets name real parameters, in range, with unique names", (double) presets.size());
+
+    // Every preset plays at a usable level: a short phrase and a held chord, measured as the
+    // loudest 100 ms (so plucks and pads compare fairly) and the peak.
+    double quietest = 0.0, loudest = -200.0, worstPeak = 0.0;
+    std::string quietestName, loudestName;
+    for (const auto& preset : presets)
+    {
+        SynthEngine engine;
+        engine.prepare (48000.0);
+        engine.setSettings (presetSettings (preset));
+
+        std::vector<float> audio, block (512);
+        auto run = [&] (int samples)
+        {
+            for (int i = 0; i < samples / 512; ++i)
+            {
+                engine.render (block.data(), 512);
+                audio.insert (audio.end(), block.begin(), block.end());
+            }
+        };
+        for (int note : { 48, 55, 60, 67 })
+        {
+            engine.noteOn (note, 0.8f);
+            run (24000);
+            engine.noteOff (note);
+            run (6144);
+        }
+        for (int note : { 48, 55, 60, 64 })
+            engine.noteOn (note, 0.8f);
+        run (144000);
+
+        double loudestWindow = 0.0, peak = 0.0;
+        constexpr int window = 4800;
+        for (size_t i = 0; i + window < audio.size(); i += window / 2)
+            loudestWindow = std::max (loudestWindow, rms (std::vector<float> (audio.begin() + (long) i, audio.begin() + (long) i + window)));
+        for (float x : audio)
+            peak = std::max (peak, (double) std::abs (x));
+
+        const double db = 20.0 * std::log10 (loudestWindow);
+        if (db < quietest) { quietest = db; quietestName = preset.name; }
+        if (db > loudest) { loudest = db; loudestName = preset.name; }
+        worstPeak = std::max (worstPeak, peak);
+    }
+    std::printf ("      presets: quietest %.1f dBFS (%s), loudest %.1f dBFS (%s)\n",
+                 quietest, quietestName.c_str(), loudest, loudestName.c_str());
+    check (quietest > -26.0 && loudest < -12.0, "every factory preset between -26 and -12 dBFS (loudest 100 ms)", loudest - quietest);
+    check (worstPeak < 1.0, "no factory preset clips", worstPeak);
 }
 
 static void testDeferredShapeLands()
@@ -616,6 +730,7 @@ int main (int argc, char** argv)
     testMinilogueXd();
     testPerformanceControls();
     testModeLoudness();
+    testFactoryPresets();
     benchmark();
     renderDemo (argc > 1 ? argv[1] : "quantum-demo.wav");
     std::printf ("%s\n", failures == 0 ? "All checks passed." : "Some checks FAILED.");
