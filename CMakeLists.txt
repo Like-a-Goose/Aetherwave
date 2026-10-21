@@ -41,7 +41,8 @@ juce_add_plugin(QuantumSynth
 
 target_sources(QuantumSynth PRIVATE
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/PresetManager.cpp)
 
 target_compile_definitions(QuantumSynth PUBLIC
     JUCE_WEB_BROWSER=0

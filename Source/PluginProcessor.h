@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PresetManager.h"
 #include "dsp/MinilogueXd.h"
 #include "dsp/SynthEngine.h"
 
@@ -25,10 +26,11 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    // The factory presets, as the host's program list.
+    int getNumPrograms() override;
+    int getCurrentProgram() override;
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -42,6 +44,7 @@ public:
     int getLastXdControl() const { return lastXdControl.load(); }
 
     juce::AudioProcessorValueTreeState parameters;
+    PresetManager presets { parameters };
     juce::MidiKeyboardState keyboardState;
 
 private:

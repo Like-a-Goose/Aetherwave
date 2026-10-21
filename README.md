@@ -48,6 +48,32 @@ The layout is paraphonic: 8 voices with two oscillators (saw, square, triangle, 
 amp envelope each, all summed into one shared quantum filter. The filter envelope retriggers
 on every new note. An LFO can move the barrier, the oscillator mix or the pitch.
 
+## Presets
+
+The bar at the top of the window browses the preset library. ◀ ▶ step through every preset;
+clicking the name opens the full list by category. **Save** stores the current sound under a
+name of your choice, and the name shows *(edited)* once a knob has moved since loading.
+
+25 factory sounds come with it, each built around a different filter mode:
+
+| Category | Presets |
+| --- | --- |
+| Bass | Barrier Bass, Well Sub, Resonant Wobble, Step Punch |
+| Lead | Tunnel Lead, Soft Sync Lead, Crystal Lead, Hydrogen Scream |
+| Keys | Box Keys, Oscillator Organ, Resonant EP |
+| Pad | Band Gap Pad, Quantum Choir, Crystal Haze, Tunnel Strings |
+| Pluck | Ramsauer Pluck, Twin Barrier Pluck, Tunnel Harp |
+| Bell | Box Bells, Hydrogen Chimes, Oscillator Glass |
+| FX | Tunnelling Sweep, Lattice Rain, Wavefunction Wah, Ionisation |
+
+They are levelled to a similar loudness. Hosts list them as the plug-in's programs too (in
+Reaper, the preset drop-down at the top of the FX window).
+
+Your own presets are files in `~/.config/Quantum Synth/Presets/` on Linux (the menu's
+*Show presets folder* opens it), one `.qspreset` XML file each, so they can be copied to
+another machine or shared. Presets leave the CC map setting alone. Factory presets are defined
+in `Source/dsp/FactoryPresets.h`.
+
 ## Playing it from a Korg minilogue xd
 
 Quantum Synth understands a minilogue xd out of the box (the **CC map** menu is set to

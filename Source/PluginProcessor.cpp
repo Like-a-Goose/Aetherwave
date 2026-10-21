@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "dsp/SettingsFromParameters.h"
 
 namespace
 {
@@ -12,12 +13,18 @@ const juce::StringArray modeNames { "Tunnel", "Reflect", "Resonant Tunnel", "Res
 const juce::StringArray lfoWaveNames { "Square", "Triangle", "Saw" };
 const juce::StringArray lfoTargetNames { "Barrier", "Mix", "Pitch" };
 const juce::StringArray ccMapNames { "Off", "minilogue xd" };
+const juce::Identifier presetEditedId { "presetEdited" };
 
 juce::AudioParameterFloatAttributes shown (int decimals, const juce::String& unit = {})
 {
     return juce::AudioParameterFloatAttributes()
         .withLabel (unit)
-        .withStringFromValueFunction ([decimals, unit] (float v, int) { return juce::String (v, decimals) + (unit.isEmpty() ? "" : " " + unit); });
+        .withStringFromValueFunction ([decimals, unit] (float v, int)
+        {
+            // String (v, 0) would print every digit, so whole numbers are rounded explicitly.
+            const auto number = decimals > 0 ? juce::String (v, decimals) : juce::String (juce::roundToInt (v));
+            return number + (unit.isEmpty() ? "" : " " + unit);
+        });
 }
 
 juce::NormalisableRange<float> timeRange (float maxSeconds)
@@ -32,6 +39,7 @@ QuantumSynthProcessor::QuantumSynthProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "QuantumSynth", createLayout())
 {
+    presets.markClean();
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout QuantumSynthProcessor::createLayout()
@@ -105,32 +113,7 @@ qs::FilterSettings QuantumSynthProcessor::getBaseFilterSettings() const
 
 qs::SynthSettings QuantumSynthProcessor::readSettings() const
 {
-    auto value = [this] (const char* id) { return parameters.getRawParameterValue (id)->load(); };
-
-    qs::SynthSettings s;
-    s.osc1Wave = (qs::Waveform) (int) value ("osc1Wave");
-    s.osc2Wave = (qs::Waveform) (int) value ("osc2Wave");
-    s.osc2Semitones = value ("osc2Semi");
-    s.osc2Cents = value ("osc2Fine");
-    s.oscMix = value ("oscMix");
-    s.filter = getBaseFilterSettings();
-    s.envAmountOctaves = value ("envAmount");
-    s.keyTrack = value ("keyTrack");
-    s.ampAttack = value ("ampA");
-    s.ampDecay = value ("ampD");
-    s.ampSustain = value ("ampS");
-    s.ampRelease = value ("ampR");
-    s.filterAttack = value ("filtA");
-    s.filterDecay = value ("filtD");
-    s.filterSustain = value ("filtS");
-    s.filterRelease = value ("filtR");
-    s.lfoWave = (qs::LfoWave) (int) value ("lfoWave");
-    s.lfoTarget = (qs::LfoTarget) (int) value ("lfoTarget");
-    s.lfoRate = value ("lfoRate");
-    s.lfoAmount = value ("lfoAmount");
-    s.bendRange = value ("bendRange");
-    s.outputGainDb = value ("gain");
-    return s;
+    return qs::settingsFromParameters ([this] (const char* id) { return parameters.getRawParameterValue (id)->load(); });
 }
 
 void QuantumSynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -230,7 +213,9 @@ juce::AudioProcessorEditor* QuantumSynthProcessor::createEditor()
 
 void QuantumSynthProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = parameters.copyState().createXml())
+    auto state = parameters.copyState();
+    state.setProperty (presetEditedId, presets.isModified(), nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -238,7 +223,33 @@ void QuantumSynthProcessor::setStateInformation (const void* data, int sizeInByt
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (parameters.state.getType()))
+        {
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
+            presets.markClean ((bool) parameters.state.getProperty (presetEditedId, false));
+        }
+}
+
+int QuantumSynthProcessor::getNumPrograms()
+{
+    return (int) qs::factoryPresets().size();
+}
+
+int QuantumSynthProcessor::getCurrentProgram()
+{
+    return juce::jmax (0, presets.getCurrentFactoryIndex());
+}
+
+void QuantumSynthProcessor::setCurrentProgram (int index)
+{
+    // Hosts may re-send the current program when a project opens; that must not wipe edits.
+    if (index != presets.getCurrentFactoryIndex())
+        presets.loadFactory (index);
+}
+
+const juce::String QuantumSynthProcessor::getProgramName (int index)
+{
+    const auto& factory = qs::factoryPresets();
+    return juce::isPositiveAndBelow (index, (int) factory.size()) ? juce::String (factory[(size_t) index].name) : juce::String();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

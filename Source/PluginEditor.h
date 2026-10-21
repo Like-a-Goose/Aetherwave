@@ -25,6 +25,27 @@ private:
     double liveBarrierHz = 800.0;
 };
 
+// Browses the preset library: previous / next, a menu of every preset, and saving your own.
+class PresetBar : public juce::Component, private juce::Timer
+{
+public:
+    explicit PresetBar (PresetManager& manager);
+    void resized() override;
+
+private:
+    void timerCallback() override;
+    void showMenu();
+    void step (int delta);
+    void beginSave();
+    void finishSave (bool commit);
+    void refresh();
+
+    PresetManager& presets;
+    juce::TextButton previous, next, browse, save { "Save" };
+    juce::TextEditor nameEditor;
+    juce::String shownText;
+};
+
 class QuantumSynthEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -71,11 +92,13 @@ private:
     // Everything is laid out at this size and scaled to the window, so enlarging the
     // window enlarges text and knobs too.
     static constexpr int designWidth = 1236, designHeight = 716;
+    static constexpr int titleWidth = 200, subtitleWidth = 180;
     float scale = 1.0f;
 
     QuantumLookAndFeel lookAndFeel;  // declared first so it outlives every component using it
     QuantumSynthProcessor& synth;
     BarrierDisplay display;
+    PresetBar presetBar;
     juce::MidiKeyboardComponent keyboard;
 
     std::vector<std::unique_ptr<Control>> controls;
